@@ -12,8 +12,8 @@
 
 ## 📚 Navigation & Documentation Index
 
-- 📋 **Master Feature Catalog:** [TDRIVE_SEMUA_FITUR_DAN_KEMAMPUAN.md](file:///e:/laragon/www/teledrive/TDrive/TDRIVE_SEMUA_FITUR_DAN_KEMAMPUAN.md)
-- 🏛️ **Technical Architecture Specification:** [ARCHITECTURE.md](file:///e:/laragon/www/teledrive/TDrive/ARCHITECTURE.md)
+- 📋 **Master Feature Catalog:** [TDRIVE_SEMUA_FITUR_DAN_KEMAMPUAN.md](TDRIVE_SEMUA_FITUR_DAN_KEMAMPUAN.md)
+- 🏛️ **Technical Architecture Specification:** [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
 
