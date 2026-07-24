@@ -54,8 +54,8 @@ export async function resolveChannel(
   channelName: string,
   isSupergroupMode: boolean = true
 ): Promise<Api.Channel> {
-  // Search user's dialogs for matching Channel or Supergroup Megagroup
-  const dialogs = await client.getDialogs({});
+  // Search user's recent dialogs for matching Channel or Supergroup Megagroup
+  const dialogs = await client.getDialogs({ limit: 150 });
   for (const dialog of dialogs) {
     if ((dialog.isChannel || dialog.isGroup) && dialog.title === channelName) {
       return dialog.entity as Api.Channel;

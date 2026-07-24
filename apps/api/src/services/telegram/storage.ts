@@ -81,11 +81,30 @@ export async function downloadFile(
   offset: number = 0,
   limit?: number
 ): Promise<{ buffer: Buffer; totalSize: number }> {
-  const env = getEnv();
   const client = await getClient(userId, creds);
-  const channel = await resolveChannel(client, env.TDRIVE_STORAGE_CHANNEL);
 
-  const entity = channel || channelId;
+  let entity: any = null;
+  try {
+    // Try resolving from GramJS memory cache first (fast path)
+    entity = await client.getEntity("-100" + channelId);
+  } catch (err) {
+    // If not in cache (e.g. after server restart), fetch dialogs until we find it.
+    // We use getDialogs with a limit first or iterDialogs if supported.
+    // GramJS iterDialogs is standard. We will just get them in chunks.
+    const dialogs = await client.getDialogs({ limit: 150 });
+    for (const dialog of dialogs) {
+      if (Number(dialog.entity?.id) === channelId) {
+        entity = dialog.entity;
+        break;
+      }
+    }
+    // If still not found, we fallback to the string ID
+  }
+
+  if (!entity) {
+    entity = "-100" + channelId;
+  }
+
   const messages = await client.getMessages(entity, { ids: [messageId] });
   const msg = messages[0];
 
