@@ -30,9 +30,6 @@ export default function LandingPage() {
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-extrabold text-lg tracking-tight text-white">TDrive</span>
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/40 text-emerald-400 font-bold">
-                  PRO SaaS
-                </Badge>
               </div>
             </div>
           </div>
