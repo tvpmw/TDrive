@@ -1,0 +1,30 @@
+export type {
+  FileKind,
+  StorageProvider,
+  SyncStatus,
+  DeletionJobStatus,
+  StorageRef,
+  DriveItem,
+  StorageStatus,
+  CreateFolderRequest,
+  CreateFileRequest,
+  UpdateDriveItemRequest,
+  DownloadZipRequest,
+  TextFileResponse,
+  SaveTextFileRequest,
+  ApiError,
+  DeletionJob,
+  User,
+} from "./types.js";
+
+export {
+  TDRIVE_STORAGE_CHANNEL,
+  MAX_UPLOAD_BYTES,
+  MAX_ARCHIVE_BYTES,
+  MAX_EDITOR_BYTES,
+  EDITABLE_EXTENSIONS,
+  DELETION_MAX_ATTEMPTS,
+  DELETION_BACKOFF_BASE,
+  DELETION_BACKOFF_MAX,
+  DELETION_LEASE_TIMEOUT,
+} from "./constants.js";

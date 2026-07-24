@@ -1,0 +1,24 @@
+# Dependencies & Builds
+node_modules/
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Local Storage & Server Temp
+storage-temp/
+server-files/
+
+# Logs & System Cache
+*.log
+.DS_Store
+Thumbs.db
+.gemini/
+.idea/
+.vscode/
