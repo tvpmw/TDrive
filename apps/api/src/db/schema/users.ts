@@ -14,6 +14,8 @@ export const users = pgTable("users", {
   telegramLoginSessionEncrypted: varchar("telegram_login_session_encrypted", { length: 4096 }),
   telegramStorageMode: varchar("telegram_storage_mode", { length: 64 }).default("supergroup").notNull(),
   telegramStorageChannelName: varchar("telegram_storage_channel_name", { length: 255 }),
+  telegramBotTokenEncrypted: varchar("telegram_bot_token_encrypted", { length: 1024 }),
+  telegramAllowedIds: varchar("telegram_allowed_ids", { length: 2048 }), // CSV of Telegram user IDs, e.g. "123,456,789"
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

@@ -19,6 +19,8 @@ import { tunnelRoutes } from "./routes/tunnels.js";
 import { advancedRouter } from "./routes/advanced.js";
 import { telegramOpsRoutes } from "./routes/telegram-ops.js";
 import { sseRoutes } from "./routes/sse.js";
+import { botRoutes } from "./routes/bot.js";
+import { startAllBots, stopAllBots } from "./services/telegram/bot-manager.js";
 
 const env = getEnv();
 
@@ -55,6 +57,7 @@ app.route("/api/telegram-ops", telegramOpsRoutes);
 app.route("/api/enterprise", enterpriseOpsRoutes);
 app.route("/api/dashboard", dashboardRoutes);
 app.route("/api/sse", sseRoutes);
+app.route("/api/bot", botRoutes);
 app.route("/webdav", webdav);
 app.route("/", systemRoutes);
 
@@ -85,6 +88,23 @@ checkQueueStatus().then((s) => {
   if (s.redis.ok) console.log("Redis & BullMQ Workers connected successfully.");
   else console.warn("Redis Queue status:", s.redis.error);
 }).catch(() => {});
+
+// Start all registered Telegram bots
+startAllBots().catch((err) => {
+  console.error("[BotManager] Failed to start bots:", err.message);
+});
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  console.log("Shutting down...");
+  await stopAllBots();
+  process.exit(0);
+});
+process.on("SIGTERM", async () => {
+  console.log("Shutting down...");
+  await stopAllBots();
+  process.exit(0);
+});
 
 export default {
   port,

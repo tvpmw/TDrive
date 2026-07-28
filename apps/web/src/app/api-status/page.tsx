@@ -76,7 +76,7 @@ export default function ApiStatusPage() {
             </CardHeader>
             <CardContent>
               <p className="text-sm text-muted-foreground mb-3">
-                Could not connect to the API server at localhost:3001.
+                Could not connect to the API server at this host.
               </p>
               <Button variant="outline" size="sm" onClick={() => refetch()}>
                 <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry

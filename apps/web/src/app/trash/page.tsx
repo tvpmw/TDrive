@@ -46,7 +46,7 @@ export default function TrashPage() {
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: queryKeys.trash(),
-    queryFn: () => apiClient.get("/trash").then((r) => r.data.data as DriveItem[]),
+    queryFn: () => apiClient.get("/trash").then((r) => (r.data.data ?? []) as DriveItem[]),
   });
 
   const restoreMutation = useMutation({

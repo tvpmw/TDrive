@@ -7,6 +7,7 @@
 ## ⚡ Core Capabilities At a Glance
 
 - [x] **Unlimited Cloud Storage:** Menggunakan infrastruktur cloud Telegram MTProto secara aman.
+- [x] **Telegram Bot Integration (`/settings`):** Bot pribadi via @BotFather — search, upload, download, share, status, analytics langsung dari chat Telegram. Dilindungi *Allowed IDs* authorization.
 - [x] **Enterprise Command & Storage Analytics Dashboard (`/dashboard`):** Dashboard analitik real-time dengan filter waktu (*Live, 24h, 7d, 30d*), radar 10 engine, heatmap kanal, dan profiler hardware OS.
 - [x] **Smart Auto-Clean Deduplication (`/drive/duplicates`):** Pemindai 1-klik yang otomatis menyisakan 1 berkas asli (*Keep 1 Original File*) dan membersihkan seluruh salinan duplikat secara masal.
 - [x] **10 Internal Engines Architecture:** Storage, Lifecycle, Planner, Worker, Policy, Queue, Telemetry, Recovery, AI, Security Engines.
@@ -18,6 +19,7 @@
 - [x] **Global Command Palette (`Ctrl+K`):** Navigasi dan pencarian instan dari mana saja.
 - [x] **Resumable HTTP Range Streaming:** Pengunduhan file besar berbasis byte-range yang dapat dilanjutkan.
 - [x] **Self-Healing & Checksum Verification:** Deteksi dan pemulihan otomatis chunk yang rusak.
+- [x] **One-Click Deploy Scripts:** Otomasi setup Linux (`setup-linux.sh`) & Windows (`setup-windows.ps1`) dengan PM2 + nginx reverse proxy.
 
 ---
 
@@ -40,7 +42,8 @@ Backend Layer
 Telegram Infrastructure
 ├── MTProto Protocol Layer
 ├── GramJS Telegram Client Pool
-└── Custom Chunk & Channel Router Engine
+├── Custom Chunk & Channel Router Engine
+└── Grammy Bot Framework (Per-User Bot Instances)
 ```
 
 ---
@@ -66,9 +69,38 @@ Telegram Infrastructure
 - **Dynamic Storage Destination Selector:** *Telegram Private Channel Mode* vs *Telegram Supergroup Forum Topics Mode* (`createForumTopic`).
 - **Drag & Drop Upload & Range Streaming:** Pengunggahan berkecepatan tinggi & pengunduhan HTTP 206 Partial Content.
 
+### 5. 🤖 Telegram Bot Integration (`/settings`)
+- **Per-User Bot Instances:** Setiap pengguna mengelola bot Telegram pribadi via token @BotFather. Bot berjalan secara independen dengan lifecycle terpisah (*register, start, stop, unregister*).
+- **12 Bot Commands:**
+  - `/start` — Hubungkan akun Telegram ke TDrive
+  - `/getid` — Tampilkan Telegram User ID (untuk setup Allowed IDs)
+  - `/help` — Menu bantuan lengkap
+  - `/search <query>` — Cari file berdasarkan nama
+  - `/list` — Tampilkan 10 file terbaru
+  - `/info <filename>` — Metadata detail & share link
+  - `/download <filename>` — Unduh file langsung ke chat (via MTProto + Bot API)
+  - `/share <filename>` — Generate share link publik
+  - `/status` — Status penyimpanan & kapasitas
+  - `/stats` — Analitik detail per kategori
+  - `/upload` — Kirim file ke bot untuk disimpan di TDrive (auto-sync ke Telegram storage)
+  - `/cancel` — Batalkan operasi saat ini
+- **Authorization System:** *Allowed IDs* CSV whitelist di database. Pengguna tidak terdaftar menerima pesan penolakan: *"Perintah ditolak, anda tidak memiliki hak akses ke bot ini."*
+- **Direct File Transfer:** `/download` mengunduh file dari MTProto storage lalu mengirim langsung via Bot API. `/upload` menerima file dari chat, auto-sync ke Telegram storage, dan membuat record di database.
+- **Settings UI (`/settings`):** Panel konfigurasi bot — info bot (nama, username, ID, izin), input token, daftar *Allowed IDs* (tambah/hapus), detail akun Telegram terhubung.
+- **REST API Routes:** `GET /bot/status`, `POST /bot/register`, `DELETE /bot/unregister`, `POST /bot/restart`, `GET/PUT /bot/allowed-ids`.
+
 ---
 
 ## 🔐 Security & Encryption
 
 - **Client-Side E2EE Security Vault (`/vault`):** Enkripsi AES-256-GCM + PBKDF2/Argon2id langsung di browser sebelum dikirim ke Telegram.
 - **Chameleon Stealth Disguise Mode (`/stealth`):** Penyamaran header file rahasia menjadi berkas lagu `.mp3` atau gambar wallpaper secara otomatis di Telegram.
+
+---
+
+## 🚀 Deployment & DevOps
+
+- **One-Click Deploy Scripts:** Otomasi setup untuk Linux (`deploy/setup-linux.sh`) dan Windows (`deploy/setup-windows.ps1`).
+- **PM2 Process Manager:** `ecosystem.config.cjs` — 2 proses (API Bun port 3001 + Next.js port 3000), auto-restart, memory limit 512MB.
+- **Nginx Reverse Proxy:** Config siap pakai (`deploy/nginx.conf`) — route `/api/`, `/bot/`, `/storage/` ke API, sisanya ke Next.js.
+- **Environment Variables:** Single `.env` file di root — PostgreSQL, Redis, JWT secret, encryption key, Telegram API credentials.

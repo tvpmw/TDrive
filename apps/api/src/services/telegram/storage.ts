@@ -3,7 +3,7 @@
  */
 import { Api } from "telegram";
 import { CustomFile } from "telegram/client/uploads.js";
-import { getClient, resolveChannel, type TelegramCredentials } from "./client.js";
+import { getClient, resolveChannel, findChannel, type TelegramCredentials } from "./client.js";
 import { getEnv } from "../../env.js";
 import { readFile, stat } from "node:fs/promises";
 
@@ -27,11 +27,19 @@ export function uploadFile(
   targetChannelName?: string,
   isSupergroupMode: boolean = true
 ): Promise<UploadResult> {
-  return (async () => {
+  const TIMEOUT_MS = 120_000; // 2 minutes max for upload
+
+  const uploadTask = (async () => {
     const env = getEnv();
     const client = await getClient(userId, creds);
     const channelName = targetChannelName || env.TDRIVE_STORAGE_CHANNEL;
-    const channel = await resolveChannel(client, channelName, isSupergroupMode);
+
+    // Find existing channel — do NOT auto-create during upload
+    let channel = await findChannel(client, channelName);
+    if (!channel) {
+      // Fallback: try resolveChannel (will create if needed — only on first setup)
+      channel = await resolveChannel(client, channelName, isSupergroupMode);
+    }
 
     if (!channel) {
       throw new Error(`Storage channel/supergroup "${channelName}" not found.`);
@@ -67,6 +75,14 @@ export function uploadFile(
       fileSize: fileStat.size,
     };
   })();
+
+  // Timeout wrapper — prevent indefinite hanging
+  return Promise.race([
+    uploadTask,
+    new Promise<UploadResult>((_, reject) =>
+      setTimeout(() => reject(new Error(`Upload timed out after ${TIMEOUT_MS / 1000}s. File may be too large or network issue.`)), TIMEOUT_MS)
+    ),
+  ]);
 }
 
 /**
@@ -79,30 +95,59 @@ export async function downloadFile(
   channelId: number,
   messageId: number,
   offset: number = 0,
-  limit?: number
+  limit?: number,
+  channelName?: string,
+  isSupergroup: boolean = true
 ): Promise<{ buffer: Buffer; totalSize: number }> {
-  const client = await getClient(userId, creds);
+  const TIMEOUT_MS = 120_000;
+
+  const downloadTask = async () => {
+    const client = await getClient(userId, creds);
+    const env = getEnv();
+
+  // Supergroup/channel IDs in Telegram use -100 prefix (e.g., raw 4301311388 → -1004301311388)
+  const fullId = Number("-100" + channelId);
 
   let entity: any = null;
+
+  // 1. getEntity FIRST — targeted lookup, won't fail if unrelated channels are broken
+  //    (getDialogs calls channels.GetChannels for ALL channels, which breaks if ANY is invalid)
   try {
-    // Try resolving from GramJS memory cache first (fast path)
-    entity = await client.getEntity("-100" + channelId);
-  } catch (err) {
-    // If not in cache (e.g. after server restart), fetch dialogs until we find it.
-    // We use getDialogs with a limit first or iterDialogs if supported.
-    // GramJS iterDialogs is standard. We will just get them in chunks.
-    const dialogs = await client.getDialogs({ limit: 150 });
-    for (const dialog of dialogs) {
-      if (Number(dialog.entity?.id) === channelId) {
-        entity = dialog.entity;
-        break;
+    entity = await client.getEntity(fullId);
+  } catch {}
+
+  // 2. Targeted GetChannels with just this channel ID (bypasses broken session channels)
+  if (!entity) {
+    try {
+      const { Api } = await import("telegram");
+      const result = await client.invoke(
+        new Api.channels.GetChannels({
+          id: [new Api.InputChannel({ channelId: fullId, accessHash: 0n })],
+        })
+      );
+      if ("chats" in result && Array.isArray(result.chats) && result.chats.length > 0) {
+        entity = result.chats[0];
       }
-    }
-    // If still not found, we fallback to the string ID
+    } catch {}
+  }
+
+  // 3. Find by channel name (safe — does NOT auto-create like resolveChannel)
+  if (!entity) {
+    try {
+      const found = await findChannel(client, channelName || env.TDRIVE_STORAGE_CHANNEL);
+      if (found) entity = found;
+    } catch {}
+  }
+
+  // 4. Final getEntity after name resolution populated cache
+  if (!entity) {
+    try {
+      entity = await client.getEntity(fullId);
+    } catch {}
   }
 
   if (!entity) {
-    entity = "-100" + channelId;
+    throw new Error(`Cannot resolve storage (ID: ${channelId}, name: ${channelName || env.TDRIVE_STORAGE_CHANNEL}). Ensure supergroup exists and account is member.`);
   }
 
   const messages = await client.getMessages(entity, { ids: [messageId] });
@@ -138,6 +183,14 @@ export async function downloadFile(
 
   if (totalSize === 0) totalSize = buffer.length;
   return { buffer, totalSize };
+  };
+
+  return Promise.race([
+    downloadTask(),
+    new Promise<{ buffer: Buffer; totalSize: number }>((_, reject) =>
+      setTimeout(() => reject(new Error(`Download timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS)
+    ),
+  ]);
 }
 
 /**

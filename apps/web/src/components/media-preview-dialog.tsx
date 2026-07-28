@@ -51,7 +51,7 @@ export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
   const isPdf = ext === "pdf";
 
   // Backend streaming / download URL with inline flag
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "/";
   const token = typeof window !== "undefined" ? (localStorage.getItem("tdrive_token") || "") : "";
   const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
   const streamUrl = `${apiBase}/api/files/${item.id}/download?inline=true${tokenQuery}`;

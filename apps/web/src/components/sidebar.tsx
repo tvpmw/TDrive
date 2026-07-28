@@ -5,8 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import {
-  HardDrive, Server, Trash2, Settings, Activity,
-  LogOut, Cloud, CloudOff, Shield, User, Sparkles,
+  HardDrive, Trash2, Settings, LogOut, Cloud, CloudOff, Shield, User, Sparkles,
   Lock, Search, FolderPlus, Upload, Command, Layers, Flame, Network, Workflow, ShieldAlert, LayoutDashboard
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +19,7 @@ interface MeData {
   isOperator: boolean;
   hasTelegramApiCredentials: boolean;
   hasTelegramSession: boolean;
+  hasBotToken: boolean;
   driveInitialized: boolean;
 }
 
@@ -31,12 +31,8 @@ const navItems = [
   { label: "Stealth Disguise", icon: ShieldAlert, href: "/stealth", badge: "Camouflage" },
   { label: "Network Hub", icon: Network, href: "/network", badge: "Proxy" },
   { label: "AI Workflows", icon: Workflow, href: "/workflows", badge: "Auto" },
-  { label: "Server Files", icon: Server, href: "/server", operatorOnly: true, badge: "NAS" },
-  { label: "Telegram Ops Health", icon: Activity, href: "/server/health", operatorOnly: true, badge: "Ops" },
-  { label: "CDN Benchmark", icon: Flame, href: "/server/benchmark", operatorOnly: true, badge: "MTProto" },
   { label: "Trash Bin", icon: Trash2, href: "/trash" },
   { label: "Settings", icon: Settings, href: "/settings" },
-  { label: "API Health", icon: Activity, href: "/api-status", operatorOnly: true, badge: "Live" },
 ];
 
 interface SidebarProps {
@@ -56,13 +52,9 @@ export function Sidebar({ className }: SidebarProps = {}) {
   const handleLogout = async () => {
     try {
       await apiClient.post("/auth/logout");
-    } catch { }
+    } catch {}
     router.push("/login");
   };
-
-  const filteredItems = navItems.filter(
-    (item) => !item.operatorOnly || me?.isOperator
-  );
 
   return (
     <aside className={cn("w-64 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm", className)}>
@@ -92,12 +84,10 @@ export function Sidebar({ className }: SidebarProps = {}) {
           Navigation
         </p>
         <nav className="space-y-1">
-          {filteredItems.map((item) => {
+          {navItems.map((item) => {
             const isActive =
               item.href === "/drive"
                 ? (pathname === "/drive" || pathname.startsWith("/drive/")) && !pathname.startsWith("/drive/duplicates")
-                : item.href === "/server"
-                ? pathname === "/server"
                 : pathname === item.href || pathname.startsWith(item.href + "/");
             return (
               <a
@@ -154,6 +144,11 @@ export function Sidebar({ className }: SidebarProps = {}) {
                     <><CloudOff className="h-2.5 w-2.5 text-amber-500" /> Offline</>
                   )}
                 </span>
+                {me.hasBotToken && (
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 border-blue-500/40 text-blue-400 gap-0.5">
+                    🤖 Bot
+                  </Badge>
+                )}
               </div>
             </div>
           </div>

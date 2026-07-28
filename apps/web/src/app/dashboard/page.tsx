@@ -40,27 +40,15 @@ export default function DashboardPage() {
     deduplicatedSavedBytes: 4200000000,
   };
 
-  const server = data?.serverStorage || {
-    totalDiskBytes: 500 * 1024 * 1024 * 1024,
-    usedDiskBytes: 120 * 1024 * 1024 * 1024,
-    freeDiskBytes: 380 * 1024 * 1024 * 1024,
-    appUsedBytes: 2500000000,
-    fileCount: 28,
-    platform: "win32",
-    arch: "x64",
-    hostname: "TDrive-Server-Node1",
-    uptimeSec: 345600,
-  };
-
   const hardware = data?.hardwareDetailed || {
-    cpuCount: 8,
-    cpuModel: "Intel(R) Core(TM) i7-12700K",
-    cpuLoadPct: 14.2,
-    memoryRssMB: 284,
-    heapUsedMB: 165,
-    totalMemMB: 16384,
-    freeMemMB: 9800,
-    eventLoopLatencyMs: 1.2,
+    cpuCount: 0,
+    cpuModel: "Host hardware details unavailable",
+    cpuLoadPct: 0,
+    memoryRssMB: 0,
+    heapUsedMB: 0,
+    totalMemMB: 0,
+    freeMemMB: 0,
+    eventLoopLatencyMs: 0,
   };
 
   const security = data?.securityMetrics || {
@@ -119,9 +107,9 @@ export default function DashboardPage() {
 
   const auditLogs = data?.auditLogs || [];
 
-  const totalAppBytes = telegram.usedBytes + server.appUsedBytes || 1;
-  const telegramPct = Math.round((telegram.usedBytes / totalAppBytes) * 100);
-  const serverPct = 100 - telegramPct;
+  const totalAppBytes = telegram.usedBytes || 1;
+  const telegramPct = 100;
+  const serverPct = 0;
 
   const totalCatBytes =
     Object.values(categories).reduce((acc: number, curr: any) => acc + (curr.size || 0), 0) || 1;
@@ -170,28 +158,12 @@ export default function DashboardPage() {
             {/* Storage Provider Filter */}
             <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-1 text-xs">
               <button
-                onClick={() => setProviderFilter("all")}
-                className={`px-2.5 py-1 rounded-md font-medium transition-all ${
-                  providerFilter === "all" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                All Storage
-              </button>
-              <button
                 onClick={() => setProviderFilter("telegram")}
                 className={`px-2.5 py-1 rounded-md font-medium transition-all ${
                   providerFilter === "telegram" ? "bg-cyan-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 Telegram
-              </button>
-              <button
-                onClick={() => setProviderFilter("server")}
-                className={`px-2.5 py-1 rounded-md font-medium transition-all ${
-                  providerFilter === "server" ? "bg-purple-600 text-white shadow" : "text-slate-400 hover:text-slate-200"
-                }`}
-              >
-                Server
               </button>
             </div>
 
@@ -209,7 +181,7 @@ export default function DashboardPage() {
 
         <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
           {/* Executive KPI Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <Card className="bg-slate-900 border-slate-800 relative overflow-hidden">
               <div className="absolute top-0 right-0 p-3 opacity-10">
                 <Send className="h-24 w-24 text-cyan-400" />
@@ -228,29 +200,6 @@ export default function DashboardPage() {
                 </div>
                 <p className="text-[11px] text-slate-500 pt-1">
                   Target: <strong className="text-slate-300">{telegram.channelName}</strong>
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-slate-900 border-slate-800 relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-3 opacity-10">
-                <Server className="h-24 w-24 text-purple-400" />
-              </div>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-purple-400 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5"><Server className="h-4 w-4" /> Local Disk ({server.platform})</span>
-                  <Badge variant="outline" className="border-purple-500/40 text-purple-300 bg-purple-950/40 text-[9px]">
-                    {Math.round((server.usedDiskBytes / server.totalDiskBytes) * 100)}% Used
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1.5">
-                <div className="text-2xl font-extrabold text-slate-100">{formatBytes(server.usedDiskBytes)}</div>
-                <div className="flex items-center gap-2 text-xs text-slate-400">
-                  <span>Free: {formatBytes(server.freeDiskBytes)}</span>
-                </div>
-                <p className="text-[11px] text-slate-500 pt-1">
-                  App Local Files: <strong className="text-slate-300">{formatBytes(server.appUsedBytes)}</strong>
                 </p>
               </CardContent>
             </Card>
@@ -424,7 +373,7 @@ export default function DashboardPage() {
                   <Cpu className="h-5 w-5 text-purple-400" /> Node.js & OS Hardware Profiler
                 </CardTitle>
                 <Badge variant="outline" className="border-purple-500/40 text-purple-300 text-xs">
-                  {server.platform} ({server.arch})
+                  Telegram Cloud
                 </Badge>
               </CardHeader>
               <CardContent className="pt-4 space-y-3 font-mono text-xs">

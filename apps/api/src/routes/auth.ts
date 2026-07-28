@@ -90,6 +90,7 @@ auth.post("/login", async (c) => {
         isOperator: user.isOperator,
         hasTelegramApiCredentials: !!user.telegramApiIdEncrypted,
         hasTelegramSession: !!user.telegramSessionEncrypted,
+        hasBotToken: !!user.telegramBotTokenEncrypted,
       },
     },
   });
@@ -117,6 +118,7 @@ auth.get("/me", authMiddleware, async (c) => {
       isOperator: user.isOperator,
       hasTelegramApiCredentials: !!user.telegramApiIdEncrypted,
       hasTelegramSession: !!user.telegramSessionEncrypted,
+      hasBotToken: !!user.telegramBotTokenEncrypted,
       driveInitialized: user.driveInitialized,
     },
   });

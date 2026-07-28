@@ -20,6 +20,7 @@
 ## ⚡ Key Highlights & Core Capabilities
 
 - ♾️ **Unlimited Storage Capacity:** Menggunakan cloud Telegram MTProto sebagai backend penyimpanan tak terbatas secara gratis & aman.
+- 🤖 **Telegram Bot Integration (`/settings`):** Bot Telegram pribadi via @BotFather — cari file, upload, download, share, cek status langsung dari chat Telegram. Dilindungi *Allowed IDs* authorization.
 - 📊 **Enterprise Command Dashboard (`/dashboard`):** Monitoring analitik real-time dengan filter waktu (*Live, 24h, 7d, 30d*), radar 10 engine, heatmap kanal Telegram, dan profiler hardware OS (Windows / Linux).
 - 🧹 **Smart Auto-Clean Deduplication (`/drive/duplicates`):** Pemindai 1-klik yang otomatis menyisakan 1 berkas asli (*Keep 1 Original File*) dan membersihkan salinan duplikat secara masal.
 - 🔐 **Client-Side AES-256-GCM E2EE Vault (`/vault`):** Enkripsi *zero-knowledge* langsung di browser sebelum payload dikirim ke server Telegram.
@@ -27,6 +28,7 @@
 - ⌨️ **Global Command Palette (`Ctrl+K`):** Pencarian dan peluncuran perintah instan dari halaman manapun.
 - ⚡ **Resumable Byte-Range HTTP Streaming:** Pengunduhan file besar berbasis HTTP 206 Partial Content.
 - 🏥 **Self-Healing Storage Doctor (`/api/enterprise/doctor`):** Pemulihan otomatis 1-klik untuk *orphan chunks* dan penyegaran `file_reference` kedaluwarsa.
+- 🚀 **One-Click Deploy Scripts:** Otomasi setup untuk Linux (`setup-linux.sh`) dan Windows (`setup-windows.ps1`) dengan PM2 + nginx reverse proxy.
 
 ---
 
@@ -40,18 +42,14 @@ TDrive beroperasi menggunakan arsitektur Decoupled Native Monorepo (*Next.js 16 
  │  - Enterprise Command Dashboard  - Global Command Palette (Ctrl+K)       │
  │  - Drive Explorer UI             - Telegram Ops Dashboard & Storage Heatmap│
  │  - Smart Auto-Clean Deduplicator - Security Vault & Stealth Disguise UI  │
+ │  - Telegram Bot Settings & Allowed IDs Management                       │
  └────────────────────────────────────┬─────────────────────────────────────┘
                                       │ REST API / Server-Sent Events (SSE)
  ┌────────────────────────────────────▼─────────────────────────────────────┐
  │                         Backend Layer (Hono Node.js)                     │
  │  - Dashboard Telemetry API       - Storage Lifecycle Engine              │
  │  - Smart Deduplication Engine    - Security & AES-256 E2EE Vault        │
- └─────────────┬──────────────────────┬──────────────────────┬──────────────┘
-               │                      │                      │
- ┌─────────────▼──────────┐ ┌─────────▼──────────┐ ┌─────────▼──────────────┐
- │ PostgreSQL 16 Database │ │ Redis & BullMQ Queue│ │ MTProto Telegram Layer   │
- │ (Drizzle ORM Schema)   │ │ (Async Workers)     │ │ (GramJS Client Pool)     │
- └────────────────────────┘ └────────────────────┘ └────────────────────────┘
+ │  - Telegram Bot Manager (grammy) - Bot Command Handler (12 commands)    │
 ```
 
 ### ⚙️ 10 Core Internal Engines:
@@ -65,6 +63,13 @@ TDrive beroperasi menggunakan arsitektur Decoupled Native Monorepo (*Next.js 16 
 8. **Recovery Engine & Storage Doctor:** 1-Click self-healing & MTProto reference refresh.
 9. **AI Engine:** Tesseract OCR visual reader & file relationship mapper (`movie.mp4` ➔ `subtitle.srt`).
 10. **Security Engine:** Client-side AES-256-GCM E2EE & Chameleon Stealth Disguise Mode.
+
+### 🤖 Telegram Bot Subsystem:
+- **Bot Manager (grammy):** Per-user bot instance lifecycle (*register, start, stop, unregister*) via `@BotFather` token.
+- **Bot Commands (12 commands):** `/start`, `/getid`, `/help`, `/search`, `/list`, `/info`, `/download`, `/share`, `/status`, `/stats`, `/upload`, `/cancel`.
+- **Authorization System:** Linked user + *Allowed IDs* CSV whitelist. Unauthorized users receive denial message.
+- **Direct File Transfer:** `/download` sends files directly via MTProto + Bot API. `/upload` stores files sent to bot with auto-sync.
+- **REST API Routes:** `GET /bot/status`, `POST /bot/register`, `DELETE /bot/unregister`, `POST /bot/restart`, `GET/PUT /bot/allowed-ids`.
 
 ---
 
@@ -151,24 +156,57 @@ Secara default:
 
 ## 🚀 Deployment (Production Native Node.js / PM2)
 
-Untuk menjalankan TDrive di server produksi (Linux / Windows) menggunakan **PM2 Process Manager**:
+### One-Click Deploy Scripts
+
+TDrive menyediakan otomasi deploy untuk Linux dan Windows:
+
+```bash
+# Linux (Ubuntu/Debian/CentOS)
+bash deploy/setup-linux.sh
+
+# Windows (PowerShell as Admin)
+powershell -ExecutionPolicy Bypass -File deploy\setup-windows.ps1
+```
+
+Script otomatis menginstall dependencies, setup PostgreSQL & Redis, build produksi, konfigurasi nginx reverse proxy, dan menjalankan via PM2.
+
+### Manual PM2 Deploy
 
 ```bash
 # Build produksi
 npm run build
 
-# Start Backend API via PM2
-pm2 start apps/api/src/index.ts --name "tdrive-api" --interpreter bun
-
-# Start Frontend Next.js via PM2
-pm2 start "npm run start --workspace=apps/web" --name "tdrive-web"
+# Start dengan ecosystem config
+pm2 start ecosystem.config.cjs
 
 # Simpan status PM2
 pm2 save
+pm2 startup
+```
+
+### Ecosystem Config (`ecosystem.config.cjs`)
+
+PM2 menjalankan 2 proses:
+- **tdrive-api:** Bun runtime, port 3001, auto-restart, 512MB memory limit
+- **tdrive-web:** Next.js production, port 3000, auto-restart
+
+### Nginx Reverse Proxy
+
+```nginx
+location /api/ { proxy_pass http://127.0.0.1:3001; }
+location /bot/  { proxy_pass http://127.0.0.1:3001; }
+location /storage/ { proxy_pass http://127.0.0.1:3001; }
+location / { proxy_pass http://127.0.0.1:3000; }
 ```
 
 ---
 
-## 🛡️ License & Credits
+## � Changelog
+
+Lihat [CHANGELOG.md](CHANGELOG.md) untuk riwayat perubahan lengkap.
+
+---
+
+## �🛡️ License & Credits
 
 Project ini dilisensikan di bawah **MIT License**. Dikembangkan oleh [tvpmw](https://github.com/tvpmw).

@@ -381,7 +381,7 @@ files.get("/:id/download", authMiddleware, async (c) => {
         const requestedSize = parts[1] ? (parseInt(parts[1], 10) - start + 1) : (1024 * 1024);
         const chunkSize = Math.min(requestedSize, 2 * 1024 * 1024); // Cap chunk to 2MB for ultra-fast response
 
-        const { buffer, totalSize } = await downloadFile(targetUserId, userCreds.creds, tgInfo.channelId, tgInfo.messageId, start, chunkSize);
+        const { buffer, totalSize } = await downloadFile(targetUserId, userCreds.creds, tgInfo.channelId, tgInfo.messageId, start, chunkSize, userCreds.channelName, userCreds.isSupergroup);
         const end = Math.min(start + buffer.length - 1, (totalSize > 0 ? totalSize - 1 : start + buffer.length - 1));
 
         return new Response(new Uint8Array(buffer), {
@@ -396,7 +396,7 @@ files.get("/:id/download", authMiddleware, async (c) => {
         });
       }
 
-      const { buffer, totalSize } = await downloadFile(targetUserId, userCreds.creds, tgInfo.channelId, tgInfo.messageId, 0);
+      const { buffer, totalSize } = await downloadFile(targetUserId, userCreds.creds, tgInfo.channelId, tgInfo.messageId, 0, undefined, userCreds.channelName, userCreds.isSupergroup);
       return new Response(new Uint8Array(buffer), {
         headers: {
           "Content-Type": item.mimeType ?? "application/octet-stream",
@@ -549,7 +549,7 @@ files.get("/:id/text", authMiddleware, async (c) => {
     }
     const tgInfo = parseTelegramRemoteId(item.storageRemoteId);
     if (tgInfo) {
-      const { buffer } = await downloadFile(userId, userCreds.creds, tgInfo.channelId, tgInfo.messageId);
+      const { buffer } = await downloadFile(userId, userCreds.creds, tgInfo.channelId, tgInfo.messageId, 0, undefined, userCreds.channelName, userCreds.isSupergroup);
       content = buffer.toString("utf8");
     }
   }

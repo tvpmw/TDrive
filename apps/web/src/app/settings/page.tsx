@@ -49,6 +49,9 @@ export default function SettingsPage() {
                 <TabsTrigger value="telegram">
                   <Send className="h-4 w-4 mr-1" /> Telegram Basics
                 </TabsTrigger>
+                <TabsTrigger value="telegram-bot">
+                  <span className="mr-1">🤖</span> Telegram Bot
+                </TabsTrigger>
                 <TabsTrigger value="telegram-advanced">
                   <Cpu className="h-4 w-4 mr-1 text-emerald-400" /> Telegram Advanced Tuning
                 </TabsTrigger>
@@ -64,6 +67,10 @@ export default function SettingsPage() {
                   hasSession={me?.hasTelegramSession ?? false}
                 />
                 <TelegramStorageModeSelector />
+              </TabsContent>
+
+              <TabsContent value="telegram-bot">
+                <TelegramBotSettings />
               </TabsContent>
 
               <TabsContent value="telegram-advanced">
@@ -342,6 +349,235 @@ function TelegramSettings({ hasApiCredentials, hasSession }: { hasApiCredentials
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function TelegramBotSettings() {
+  const queryClient = useQueryClient();
+  const [botToken, setBotToken] = useState("");
+  const [newAllowedId, setNewAllowedId] = useState("");
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const { data: botStatus, isLoading: statusLoading } = useQuery({
+    queryKey: ["bot-status"],
+    queryFn: () => apiClient.get("/bot/status").then((r) => r.data.data),
+  });
+
+  const { data: allowedData, refetch: refetchAllowed } = useQuery({
+    queryKey: ["bot-allowed-ids"],
+    queryFn: () => apiClient.get("/bot/allowed-ids").then((r) => r.data.data),
+  });
+
+  const registerMutation = useMutation({
+    mutationFn: (token: string) => apiClient.post("/bot/register", { token }),
+    onSuccess: () => {
+      setMessage({ type: "success", text: "Bot registered and started!" });
+      setBotToken("");
+      queryClient.invalidateQueries({ queryKey: ["bot-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.me() });
+    },
+    onError: (err: any) => {
+      setMessage({ type: "error", text: err.response?.data?.message ?? "Failed to register bot" });
+    },
+  });
+
+  const unregisterMutation = useMutation({
+    mutationFn: () => apiClient.delete("/bot/unregister"),
+    onSuccess: () => {
+      setMessage({ type: "success", text: "Bot unregistered." });
+      queryClient.invalidateQueries({ queryKey: ["bot-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.me() });
+    },
+  });
+
+  const restartMutation = useMutation({
+    mutationFn: () => apiClient.post("/bot/restart"),
+    onSuccess: () => {
+      setMessage({ type: "success", text: "Bot restarted." });
+      queryClient.invalidateQueries({ queryKey: ["bot-status"] });
+    },
+  });
+
+  const updateAllowedIdsMutation = useMutation({
+    mutationFn: (ids: string[]) => apiClient.put("/bot/allowed-ids", { allowedIds: ids }),
+    onSuccess: () => {
+      setMessage({ type: "success", text: "Allowed IDs updated." });
+      refetchAllowed();
+    },
+    onError: (err: any) => {
+      setMessage({ type: "error", text: err.response?.data?.message ?? "Failed to update" });
+    },
+  });
+
+  const addAllowedId = () => {
+    if (!newAllowedId.trim()) return;
+    const current = allowedData?.allowedIds ?? [];
+    if (current.includes(newAllowedId.trim())) return;
+    updateAllowedIdsMutation.mutate([...current, newAllowedId.trim()]);
+    setNewAllowedId("");
+  };
+
+  const removeAllowedId = (id: string) => {
+    const current = allowedData?.allowedIds ?? [];
+    updateAllowedIdsMutation.mutate(current.filter((i: string) => i !== id));
+  };
+
+  return (
+    <Card className="border-border/60 bg-card/60 backdrop-blur-md">
+      <CardHeader>
+        <CardTitle className="text-base font-semibold flex items-center gap-2">
+          🤖 Telegram Bot Integration
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Connect your own Telegram Bot (via @BotFather) to manage files from Telegram chat.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {message && (
+          <div className={`flex items-center gap-2 text-sm ${message.type === "success" ? "text-green-600" : "text-destructive"}`}>
+            {message.type === "success" ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+            {message.text}
+          </div>
+        )}
+
+        {/* Bot Info */}
+        {botStatus && (
+          <div className="p-3 rounded-lg bg-accent/40 border border-border/40 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 rounded-full ${botStatus.running ? "bg-green-500" : "bg-red-500"}`} />
+              <span className="text-sm font-medium">{botStatus.running ? "Bot Running" : "Bot Offline"}</span>
+            </div>
+            {botStatus.botInfo && (
+              <div className="grid grid-cols-2 gap-2 text-xs mt-2">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Name</span>
+                  <p className="font-medium">{botStatus.botInfo.firstName}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Username</span>
+                  <p className="font-medium text-blue-400">@{botStatus.botInfo.username}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Bot ID</span>
+                  <p className="font-mono text-[11px]">{botStatus.botInfo.id}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Can Join Groups</span>
+                  <p>{botStatus.botInfo.canJoinGroups ? "Yes" : "No"}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Can Read Messages</span>
+                  <p>{botStatus.botInfo.canReadMessages ? "Yes" : "No"}</p>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground">Inline Queries</span>
+                  <p>{botStatus.botInfo.supportsInline ? "Enabled" : "Disabled"}</p>
+                </div>
+              </div>
+            )}
+            {botStatus.linkedAccounts?.length > 0 && (
+              <div className="text-xs mt-2 pt-2 border-t border-border/40 space-y-1">
+                <span className="text-muted-foreground">Connected Telegram Account</span>
+                {botStatus.linkedAccounts.map((a: any) => (
+                  <div key={a.telegramUserId} className="flex items-center gap-2">
+                    <span className="font-mono text-emerald-400">{a.telegramUserId}</span>
+                    <span className="text-muted-foreground">—</span>
+                    <span className="text-foreground font-medium">{a.firstName}</span>
+                    {a.username && <span className="text-blue-400">@{a.username}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Setup Instructions */}
+        <div className="text-xs text-muted-foreground space-y-1.5 bg-background/60 p-3 rounded-lg border border-border/40">
+          <p className="font-semibold text-foreground">Setup Instructions:</p>
+          <ol className="list-decimal list-inside space-y-1">
+            <li>Open Telegram and search for <span className="font-mono text-emerald-400">@BotFather</span></li>
+            <li>Create a new bot with <span className="font-mono">/newbot</span></li>
+            <li>Copy the bot token</li>
+            <li>Paste it below and click Register</li>
+            <li>Open your bot in Telegram and send <span className="font-mono">/start</span></li>
+          </ol>
+        </div>
+
+        {/* Token Input */}
+        <div className="space-y-2">
+          <Label htmlFor="bot-token">Bot Token (from @BotFather)</Label>
+          <div className="flex gap-2">
+            <Input
+              id="bot-token"
+              type="password"
+              value={botToken}
+              onChange={(e) => setBotToken(e.target.value)}
+              placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+              disabled={registerMutation.isPending}
+            />
+            <Button
+              onClick={() => botToken && registerMutation.mutate(botToken)}
+              disabled={!botToken || registerMutation.isPending}
+            >
+              {registerMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Register"}
+            </Button>
+          </div>
+        </div>
+
+        {/* Actions */}
+        {botStatus?.hasToken && (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={() => restartMutation.mutate()} disabled={restartMutation.isPending}>
+              <RefreshCw className="h-4 w-4 mr-1" /> Restart
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => unregisterMutation.mutate()} disabled={unregisterMutation.isPending}>
+              Unregister Bot
+            </Button>
+          </div>
+        )}
+
+        {/* Allowed IDs */}
+        {botStatus?.hasToken && (
+          <div className="space-y-3 pt-2 border-t border-border/40">
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold">Allowed Telegram User IDs</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Only these IDs can use the bot. Send <span className="font-mono text-emerald-400">/getid</span> in the bot to get your Telegram User ID.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={newAllowedId}
+                onChange={(e) => setNewAllowedId(e.target.value)}
+                placeholder="e.g. 123456789"
+                onKeyDown={(e) => e.key === "Enter" && addAllowedId()}
+              />
+              <Button variant="outline" size="sm" onClick={addAllowedId} disabled={!newAllowedId.trim() || updateAllowedIdsMutation.isPending}>
+                Add
+              </Button>
+            </div>
+            {allowedData?.allowedIds?.length > 0 && (
+              <div className="space-y-1.5">
+                {allowedData.allowedIds.map((id: string) => (
+                  <div key={id} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-background/60 border border-border/40 text-xs">
+                    <span className="font-mono">{id}</span>
+                    <button
+                      className="text-destructive hover:text-destructive/80 text-[11px]"
+                      onClick={() => removeAllowedId(id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {allowedData?.allowedIds?.length === 0 && (
+              <p className="text-[11px] text-amber-500">⚠ No allowed IDs set. Only the bot owner (via /start) can use the bot.</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

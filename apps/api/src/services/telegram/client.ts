@@ -94,6 +94,59 @@ export async function resolveChannel(
 }
 
 /**
+ * Find a channel/supergroup by name WITHOUT creating it.
+ * Returns null if not found. Safe for download/upload where you don't want auto-create.
+ */
+export async function findChannel(
+  client: TelegramClient,
+  channelName: string
+): Promise<Api.Channel | null> {
+  try {
+    const dialogs = await client.getDialogs({ limit: 300 });
+    for (const dialog of dialogs) {
+      if ((dialog.isChannel || dialog.isGroup) && dialog.title === channelName) {
+        return dialog.entity as Api.Channel;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Get all forum topics from a supergroup.
+ * Returns array of { id, title, messageCount, iconColor }.
+ */
+export async function getForumTopics(
+  client: TelegramClient,
+  channel: Api.Channel
+): Promise<Array<{ id: number; title: string; messageCount?: number; iconColor?: number }>> {
+  try {
+    const result = await client.invoke(
+      new Api.channels.GetForumTopics({
+        channel,
+        offset_date: 0,
+        offset_id: 0,
+        offset_topic: 0,
+        limit: 100,
+      })
+    );
+
+    if (result && "topics" in result && Array.isArray(result.topics)) {
+      return result.topics
+        .filter((t: any) => t.id !== 1) // Exclude "General" topic (ID=1)
+        .map((t: any) => ({
+          id: t.id,
+          title: t.title || "Untitled",
+          iconColor: t.icon_color,
+        }));
+    }
+  } catch (err) {
+    console.error("[client] Failed to get forum topics:", err);
+  }
+  return [];
+}
+
+/**
  * Create a new Telegram Forum Topic thread for a TDrive Folder.
  * Returns the created topic ID (replyTo / message ID).
  */

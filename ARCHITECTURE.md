@@ -14,12 +14,14 @@ TDrive beroperasi menggunakan arsitektur Decoupled Native Node.js & Next.js Mono
  │  - Enterprise Command Dashboard  - Global Command Palette (Ctrl+K)       │
  │  - Drive Explorer UI             - Telegram Ops Dashboard & Storage Heatmap│
  │  - Smart Auto-Clean Deduplicator - Security Vault & Stealth Disguise UI  │
+ │  - Telegram Bot Settings & Allowed IDs Management UI                    │
  └────────────────────────────────────┬─────────────────────────────────────┘
                                       │ REST API / Server-Sent Events (SSE)
  ┌────────────────────────────────────▼─────────────────────────────────────┐
  │                         Backend Layer (Hono Node.js)                     │
  │  - Dashboard Telemetry API       - Storage Lifecycle Engine              │
  │  - Smart Deduplication Engine    - Security & AES-256 E2EE Vault        │
+ │  - Telegram Bot Manager (grammy) - Bot Command Handler (12 commands)    │
  └─────────────┬──────────────────────┬──────────────────────┬──────────────┘
                │                      │                      │
  ┌─────────────▼──────────┐ ┌─────────▼──────────┐ ┌─────────▼──────────────┐
@@ -44,6 +46,79 @@ Sistem internal TDrive terbagi menjadi 10 modul engine mandiri yang terstruktur:
 8. **Recovery Engine & Storage Doctor:** Diagnostik dan pemulihan otomatis 1-klik untuk menangani orphan chunks, expired file references, dan rebalance channel.
 9. **AI Engine:** Modul pengenalan visual OCR dan pemetaan keterikatan berkas (*File Relationship Mapping*).
 10. **Security Engine:** Client-side AES-256-GCM + PBKDF2/Argon2id E2EE Vault & Stealth Disguise Mode.
+
+---
+
+## 2.1 Telegram Bot Subsystem Architecture
+
+TDrive mendukung **Telegram Bot Integration** yang memungkinkan pengguna mengelola file langsung dari chat Telegram. Bot menggunakan library **grammy** (Bot API) dan berjalan secara terpisah per pengguna (*per-user bot instances*).
+
+```text
+ User (Telegram App)            TDrive Backend
+       │                              │
+       │──── /command ──────────────▶│ grammy Bot Handler
+       │                              │   ├── requireAuth() ──▶ PostgreSQL (allowed IDs)
+       │                              │   ├── /download ──────▶ MTProto downloadFile()
+       │                              │   ├── /upload ────────▶ Bot API getFile() → MTProto uploadFile()
+       │                              │   ├── /search ────────▶ PostgreSQL (drive_items ILIKE)
+       │                              │   └── /share ─────────▶ PostgreSQL (shareToken)
+       │◀── reply (text/file) ────────│
+```
+
+**Bot Manager (`bot-manager.ts`):** Mengelola lifecycle bot per pengguna:
+- `registerBot(userId, token)` — Simpan token terenkripsi, buat instance grammy
+- `startBot(userId)` — Mulai polling/gracefulStop
+- `stopBot(userId)` — Hentikan bot instance
+- `unregisterBot(userId)` — Hapus token & stop bot
+- `getBotInfo(userId)` — Dapatkan info bot via `getMe()`
+- `startAllBots()` — Mulai semua bot saat server boot
+
+**Bot Commands (`bot-commands.ts`):** 12 command handler dengan authorization guard:
+- `requireAuth(ctx)` — Cek linked user OR allowed IDs CSV. Kirim pesan penolakan jika unauthorized.
+- `/start` — Link Telegram user → TDrive user (1:1 mapping)
+- `/getid` — Tampilkan Telegram User ID (tidak dilindungi auth)
+- `/download` — Fetch via MTProto, kirim via Bot API (`ctx.replyWithDocument`)
+- `/upload` — Download dari Bot API, hash check, auto-sync ke MTProto storage
+- `/search`, `/list`, `/info`, `/share`, `/status`, `/stats`, `/cancel` — Query PostgreSQL + format output
+
+**Bot Routes (`bot.ts`):** REST API endpoints:
+- `GET /bot/status` — Running status, bot info, linked accounts
+- `POST /bot/register` — Register & start bot
+- `DELETE /bot/unregister` — Stop & unregister bot
+- `POST /bot/restart` — Restart bot instance
+- `GET /bot/allowed-ids` — Dapatkan daftar allowed IDs
+- `PUT /bot/allowed-ids` — Update daftar allowed IDs
+
+---
+
+## 2.2 Deploy Automation Architecture
+
+TDrive menyediakan script deploy otomatis untuk production deployment:
+
+```text
+ deploy/
+ ├── setup-linux.sh      — Instalasi otomatis Linux (Ubuntu/Debian/CentOS)
+ ├── setup-windows.ps1   — Instalasi otomatis Windows (PowerShell)
+ └── nginx.conf          — Konfigurasi nginx reverse proxy
+
+ ecosystem.config.cjs    — PM2 process manager config
+ └── tdrive-api (Bun, port 3001, 512MB limit)
+ └── tdrive-web (Next.js, port 3000)
+```
+
+**Deploy Flow:**
+```text
+  Setup Script
+       │
+       ▼
+ [Install System Deps] → [Install Bun] → [npm install]
+       │
+       ▼
+ [Setup PostgreSQL & Redis] → [Create .env] → [npm run db:push]
+       │
+       ▼
+ [npm run build] → [PM2 Start] → [Configure nginx] → [pm2 save && pm2 startup]
+```
 
 ---
 
@@ -86,8 +161,10 @@ Proses deduplikasi pintar (*Smart Auto-Clean*) mengevaluasi grup duplikat dan me
 
 ## 5. Database Schema Overview (PostgreSQL + Drizzle ORM)
 
-- **`users`:** Pengguna, kredensial terenkripsi, status Telegram session, mode penyimpanan.
+- **`users`:** Pengguna, kredensial terenkripsi, status Telegram session, mode penyimpanan, **bot token terenkripsi**, **allowed IDs CSV**.
 - **`drive_items`:** Metadata berkas & folder, hirarki parent, ukuran, MIME, SHA-256 hash, E2EE IV.
+- **`bot_links`:** Mapping akun Telegram → TDrive user (linked accounts, username, nama).
+- **`bot_chat_states`:** State machine percakapan bot (idle, awaiting_search, dll).
 - **`telegram_accounts`:** Pool akun MTProto, score kesehatan (1-5 bintang), latency ms, status FloodWait.
 - **`item_chunk_manifests`:** Manifest pemecahan chunk file besar ke banyak message Telegram.
 - **`saved_searches`:** Query pencarian tersimpan pengguna.

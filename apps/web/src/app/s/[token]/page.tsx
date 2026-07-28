@@ -46,7 +46,7 @@ export default function PublicSharePage({ params }: { params: Promise<{ token: s
     setDownloadError(null);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"}/api/public/share/${token}/download`, {
+      const res = await fetch(`/api/public/share/${token}/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: password || undefined }),
