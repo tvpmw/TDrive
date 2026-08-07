@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ["lucide-react"],
   },
   async rewrites() {
-    const api = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
+    const api = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3003";
     return [
       { source: "/api/:path*", destination: `${api}/api/:path*` },
       { source: "/auth/:path*", destination: `${api}/api/auth/:path*` },
@@ -16,7 +16,9 @@ const nextConfig: NextConfig = {
       { source: "/webdav/:path*", destination: `${api}/webdav/:path*` },
       { source: "/sse/:path*", destination: `${api}/api/sse/:path*` },
       { source: "/server/:path*", destination: `${api}/api/:path*` },
-      { source: "/storage/:path*", destination: `${api}/api/storage/:path*` },
+      { source: "/storage/status", destination: `${api}/api/storage/status` },
+      { source: "/storage/settings", destination: `${api}/api/storage/settings` },
+      { source: "/storage/analytics", destination: `${api}/api/storage/analytics` },
       { source: "/files", destination: `${api}/api/files` },
       { source: "/files/:path*", destination: `${api}/api/files/:path*` },
       { source: "/folders", destination: `${api}/api/folders` },
