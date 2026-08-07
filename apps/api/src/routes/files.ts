@@ -194,10 +194,11 @@ files.post("/upload", authMiddleware, async (c) => {
 
   await writeFile(stagedPath, buffer);
 
-  let finalSyncStatus = "local";
+  // Auto-sync attempt — must never fail the upload
+  let finalSyncStatus: "local" | "synced" | "sync_failed" = "local";
   let finalRemoteId = remoteId;
+  let syncError: string | null = null;
 
-  // Auto-sync attempt
   const userCreds = await getUserTelegramCreds(userId);
   if (userCreds) {
     try {
@@ -223,8 +224,10 @@ files.post("/upload", authMiddleware, async (c) => {
       finalRemoteId = `telegram://${result.channelId}/${result.messageId}`;
       finalSyncStatus = "synced";
       await unlink(stagedPath).catch(() => {});
-    } catch {
-      // Fallback to local if Telegram auto-sync encounters transient error
+    } catch (err: any) {
+      finalSyncStatus = "sync_failed";
+      syncError = err?.message || "Sync failed";
+      await unlink(stagedPath).catch(() => {});
     }
   }
 
