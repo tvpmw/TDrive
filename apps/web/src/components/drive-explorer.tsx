@@ -392,11 +392,11 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
             </div>
           )}
           <div className="flex-1" />
-          <div className="relative w-72">
+          <div className="relative w-72 hidden md:block">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input placeholder='Cari: nama, type:image, size:>50MB...' value={search} onChange={(e) => setSearch(e.target.value)} className="pl-7 h-8 text-xs" />
           </div>
-          <div className="flex items-center gap-0.5">
+          <div className="flex items-center gap-0.5 flex-wrap justify-end">
             {(["name", "size", "date"] as const).map((field) => (
               <Button key={field} variant={sortBy === field ? "secondary" : "ghost"} size="sm" className="h-7 text-xs px-2" onClick={() => toggleSort(field)}>
                 {field === "name" ? "Name" : field === "size" ? "Size" : "Date"}

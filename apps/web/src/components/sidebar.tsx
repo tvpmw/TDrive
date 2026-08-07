@@ -71,7 +71,7 @@ export function Sidebar({ className }: SidebarProps = {}) {
                 PRO
               </Badge>
             </div>
-            <p className="text-[11px] text-muted-foreground font-medium">Telegram Drive Cloud System</p>
+            <p className="text-[11px] text-muted-foreground font-medium hidden sm:block">Telegram Drive Cloud System</p>
           </div>
         </div>
       </div>
