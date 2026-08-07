@@ -194,42 +194,11 @@ files.post("/upload", authMiddleware, async (c) => {
 
   await writeFile(stagedPath, buffer);
 
-  // Auto-sync attempt — must never fail the upload
+  // Auto-sync must never break upload response.
+  // Save metadata immediately, then retry Telegram sync in background.
   let finalSyncStatus: "local" | "synced" | "sync_failed" = "local";
   let finalRemoteId = remoteId;
   let syncError: string | null = null;
-
-  const userCreds = await getUserTelegramCreds(userId);
-  if (userCreds) {
-    try {
-      // Find parent folder topic ID if uploading inside a folder
-      let topicId: string | number | undefined = undefined;
-      if (parentId) {
-        const [parentFolder] = await db.select().from(driveItems).where(eq(driveItems.id, parentId)).limit(1);
-        if (parentFolder?.telegramTopicId) {
-          topicId = parentFolder.telegramTopicId;
-        }
-      }
-
-      const result = await uploadFile(
-        userId,
-        userCreds.creds,
-        stagedPath,
-        file.name,
-        file.type || undefined,
-        topicId,
-        userCreds.channelName,
-        userCreds.isSupergroup
-      );
-      finalRemoteId = `telegram://${result.channelId}/${result.messageId}`;
-      finalSyncStatus = "synced";
-      await unlink(stagedPath).catch(() => {});
-    } catch (err: any) {
-      finalSyncStatus = "sync_failed";
-      syncError = err?.message || "Sync failed";
-      await unlink(stagedPath).catch(() => {});
-    }
-  }
 
   const id = newId();
   await db.insert(driveItems).values({
@@ -240,15 +209,56 @@ files.post("/upload", authMiddleware, async (c) => {
     parentId: parentId || null,
     size: file.size,
     mimeType: file.type || "application/octet-stream",
-    storageProvider: finalSyncStatus === "synced" ? (userCreds?.isSupergroup ? "telegram-supergroup-topic" : "telegram-private-channel") : "local",
+    storageProvider: "local",
     storageRemoteId: finalRemoteId,
-    storageChannelName: userCreds?.channelName || "TeleDrive Storage",
-    syncStatus: finalSyncStatus,
+    storageChannelName: "TeleDrive Storage",
+    syncStatus: "local",
     fileHash: fileHash,
   });
 
   const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
-  return c.json({ data: item }, 201);
+  const createdItem = item;
+
+  // Background Telegram sync — fire-and-forget with best-effort error capture
+  const userCredsForSync = await getUserTelegramCreds(userId).catch(() => null);
+  if (createdItem && userCredsForSync) {
+    Promise.resolve().then(async () => {
+      try {
+        let topicId: string | number | undefined = undefined;
+        if (createdItem.parentId) {
+          const [parentFolder] = await db.select().from(driveItems).where(eq(driveItems.id, createdItem.parentId)).limit(1);
+          if (parentFolder?.telegramTopicId) topicId = parentFolder.telegramTopicId;
+        }
+        const result = await uploadFile(
+          userId,
+          userCredsForSync.creds,
+          stagedPath,
+          createdItem.name,
+          createdItem.mimeType ?? undefined,
+          topicId,
+          userCredsForSync.channelName,
+          userCredsForSync.isSupergroup
+        );
+        await db.update(driveItems).set({
+          storageProvider: userCredsForSync.isSupergroup ? "telegram-supergroup-topic" : "telegram-private-channel",
+          storageRemoteId: `telegram://${result.channelId}/${result.messageId}`,
+          storageChannelName: userCredsForSync.channelName || "TeleDrive Storage",
+          syncStatus: "synced",
+          updatedAt: new Date(),
+        }).where(eq(driveItems.id, createdItem.id));
+        await unlink(stagedPath).catch(() => {});
+      } catch (err: any) {
+        await db.update(driveItems).set({
+          syncStatus: "sync_failed",
+          syncError: err?.message || "Sync failed",
+          updatedAt: new Date(),
+        }).where(eq(driveItems.id, createdItem.id));
+        await unlink(stagedPath).catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
+  return c.json({ data: createdItem }, 201);
 });
 
 // Toggle Starred (Favorites)
