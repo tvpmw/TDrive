@@ -1,12 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import {
   HardDrive, Trash2, Settings, LogOut, Cloud, CloudOff, Shield, User, Sparkles,
-  Lock, Search, FolderPlus, Upload, Command, Layers, Flame, Network, Workflow, ShieldAlert, LayoutDashboard
+  Lock, Search, FolderPlus, Upload, Command, Layers, Flame, Network, Workflow, ShieldAlert, LayoutDashboard,
+  PanelLeftClose, PanelLeft
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -42,6 +44,7 @@ interface SidebarProps {
 export function Sidebar({ className }: SidebarProps = {}) {
   const pathname = usePathname();
   const router = useRouter();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const { data: me } = useQuery({
     queryKey: queryKeys.me(),
@@ -56,8 +59,10 @@ export function Sidebar({ className }: SidebarProps = {}) {
     router.push("/login");
   };
 
-  return (
-    <aside className={cn("w-64 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm", className)}>
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+
+  const content = (
+    <>
       {/* Brand Header */}
       <div className="p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -74,12 +79,17 @@ export function Sidebar({ className }: SidebarProps = {}) {
             <p className="text-[11px] text-muted-foreground font-medium hidden sm:block">Telegram Drive Cloud System</p>
           </div>
         </div>
+        {isMobile && (
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMobileOpen(false)}>
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       <Separator className="opacity-50" />
 
       {/* Main Navigation */}
-      <div className="px-3 py-3">
+      <div className="px-3 py-3 flex-1 overflow-y-auto">
         <p className="px-2 mb-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
           Navigation
         </p>
@@ -93,6 +103,7 @@ export function Sidebar({ className }: SidebarProps = {}) {
               <a
                 key={item.href}
                 href={item.href}
+                onClick={() => isMobile && setMobileOpen(false)}
                 className={cn(
                   "group relative flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all duration-200",
                   isActive
@@ -164,6 +175,42 @@ export function Sidebar({ className }: SidebarProps = {}) {
           <span>Sign Out</span>
         </Button>
       </div>
+    </>
+  );
+
+  // Mobile: drawer
+  if (isMobile) {
+    return (
+      <>
+        {/* Floating hamburger on mobile */}
+        {!mobileOpen && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="fixed bottom-4 left-4 z-40 h-12 w-12 rounded-full shadow-lg bg-background/90 border border-border"
+            onClick={() => setMobileOpen(true)}
+          >
+            <PanelLeft className="h-5 w-5" />
+          </Button>
+        )}
+        {mobileOpen && (
+          <div className="md:hidden fixed inset-0 z-50">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
+            <div className="absolute left-0 top-0 h-full w-72 shadow-2xl">
+              <aside className={cn("w-72 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm h-full", className)}>
+                {content}
+              </aside>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Desktop: inline
+  return (
+    <aside className={cn("w-64 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm", className)}>
+      {content}
     </aside>
   );
 }
