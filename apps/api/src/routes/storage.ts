@@ -140,7 +140,7 @@ storage.get("/analytics", authMiddleware, async (c) => {
     // Sync status count
     if (item.syncStatus === "synced") syncStatus.synced++;
     else if (item.syncStatus === "syncing") syncStatus.syncing++;
-    else if (item.syncStatus === "error") syncStatus.error++;
+    else if (item.syncStatus === "sync_failed") syncStatus.error++;
     else syncStatus.local++;
 
     // Category detection

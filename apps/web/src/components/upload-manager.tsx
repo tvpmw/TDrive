@@ -31,10 +31,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const [minimized, setMinimized] = useState(false);
 
   const addTask = (task: Omit<UploadTask, "progress" | "status">) => {
-    setTasks((prev) => [
-      ...prev,
-      { ...task, progress: 0, status: "uploading" },
-    ]);
+    setTasks((prev) => {
+      const next: UploadTask[] = [...prev, { ...task, progress: 0, status: "uploading" }];
+      if (next.length > 50) return next.slice(next.length - 50);
+      return next;
+    });
   };
 
   const updateProgress = (id: string, progress: number) => {

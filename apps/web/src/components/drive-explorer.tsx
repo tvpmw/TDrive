@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   File, Folder, Upload, Trash2, Search, FolderPlus, Cloud, CloudOff,
   Download, Edit3, HardDrive, LayoutGrid, List, MoreHorizontal,
@@ -97,6 +97,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const queryClient = useQueryClient();
   const uploadManager = useUploadManager();
   const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [editingFile, setEditingFile] = useState<{ id: string; name: string } | null>(null);
@@ -109,6 +110,12 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Debounce search 300ms to avoid refetch storm
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const { data: items = [], isLoading } = useQuery({
     queryKey: queryKeys.files(parentId),
@@ -137,6 +144,17 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
     queryFn: () => apiClient.get("/folders/stats/usage").then((r) => r.data.data as { totalSize: number; fileCount: number; folderCount: number }),
     refetchInterval: 5000,
   });
+
+  const { data: dashboardStats } = useQuery({
+    queryKey: ["dashboard-stats"],
+    queryFn: () => apiClient.get("/dashboard/stats").then((r) => r.data.data),
+    staleTime: 15_000,
+  });
+
+  const activeChannelsCount = dashboardStats?.telegramStorage?.channelsCount ?? usage?.folderCount ?? 0;
+  const encryptedCount = dashboardStats?.securityMetrics?.encryptedCount ?? items.filter((i) => i.isEncrypted).length;
+  const apiHealthLatencyMs = dashboardStats?.hardwareDetailed?.eventLoopLatencyMs ? Number((dashboardStats.hardwareDetailed.eventLoopLatencyMs as number).toFixed(1)) : 0;
+  const bandwidthTodayBytes = ((dashboardStats?.activity7Days as any[]) ?? []).reduce((sum, day) => sum + ((day.uploadMB ?? 0) + (day.downloadMB ?? 0)) * 1024 * 1024, 0);
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -344,8 +362,10 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
         <StatsGrid
           totalFiles={usage?.fileCount ?? items.length}
           totalStorageBytes={usage?.totalSize ?? 0}
-          encryptedCount={items.filter((i) => i.isEncrypted).length}
-          activeChannelsCount={1}
+          encryptedCount={encryptedCount}
+          activeChannelsCount={activeChannelsCount}
+          bandwidthTodayBytes={bandwidthTodayBytes}
+          apiHealthLatencyMs={apiHealthLatencyMs}
         />
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
@@ -394,11 +414,11 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           <div className="flex-1" />
           <div className="relative w-72 hidden md:block">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input placeholder='Cari: nama, type:image, size:>50MB...' value={search} onChange={(e) => setSearch(e.target.value)} className="pl-7 h-8 text-xs" />
+            <Input placeholder='Cari: nama, type:image, size:>50MB...' value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="pl-7 h-8 text-xs" />
           </div>
           <div className="flex items-center gap-0.5 flex-wrap justify-end">
             {(["name", "size", "date"] as const).map((field) => (
-              <Button key={field} variant={sortBy === field ? "secondary" : "ghost"} size="sm" className="h-7 text-xs px-2" onClick={() => toggleSort(field)}>
+              <Button key={field} variant={sortBy === field ? "secondary" : "ghost"} size="sm" className="h-10 text-xs px-3 md:h-7 md:px-2" onClick={() => toggleSort(field)}>
                 {field === "name" ? "Name" : field === "size" ? "Size" : "Date"}
                 {sortBy === field && <span className="ml-0.5">{sortDir === "asc" ? "↑" : "↓"}</span>}
               </Button>
