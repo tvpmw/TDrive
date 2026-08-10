@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 import { db } from "../db/index.js";
 import { driveItems } from "../db/schema/drive-items.js";
 import { users } from "../db/schema/users.js";
-import { eq, and, isNull, desc, ilike } from "drizzle-orm";
+import { eq, and, isNull, desc, ilike, inArray, sql } from "drizzle-orm";
 import { authMiddleware, type Variables } from "../middleware/auth.js";
 import { newId } from "../lib/utils.js";
 import { getEnv } from "../env.js";
@@ -56,9 +56,16 @@ function parseTelegramRemoteId(remoteId: string): { channelId: number; messageId
 // Ringkasan semua tag & koleksi milik user (untuk filter chip di drive)
 files.get("/tags/summary", authMiddleware, async (c) => {
   const userId = c.get("userId");
+  // Hanya ambil rows yang benar-benar punya tags/collections (bukan load semua item)
   const rows = await db.select({ tags: driveItems.tags, collections: driveItems.collections })
     .from(driveItems)
-    .where(and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt)));
+    .where(
+      and(
+        eq(driveItems.userId, userId),
+        isNull(driveItems.deletedAt),
+        sql`(COALESCE(${driveItems.tags},'') <> '' OR COALESCE(${driveItems.collections},'') <> '')`
+      )
+    );
 
   const tagMap = new Map<string, number>();
   const collMap = new Map<string, number>();
@@ -344,10 +351,9 @@ files.post("/bulk/zip", authMiddleware, async (c) => {
     z.object({ ids: z.array(z.string()).min(1).max(200) }),
     await c.req.json()
   );
-  const rows = await db.select().from(driveItems).where(
-    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+  const selected = await db.select().from(driveItems).where(
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt), eq(driveItems.kind, "file"), inArray(driveItems.id, body.ids))
   );
-  const selected = rows.filter((r) => body.ids.includes(r.id) && r.kind === "file");
   if (selected.length === 0) return c.json({ error: "Bad Request", message: "Tidak ada file yang dipilih" }, 400);
 
   const entries: { name: string; buffer: Buffer; mtime: Date }[] = [];
@@ -383,10 +389,9 @@ files.post("/bulk/duplicate", authMiddleware, async (c) => {
     z.object({ ids: z.array(z.string()).min(1).max(200) }),
     await c.req.json()
   );
-  const rows = await db.select().from(driveItems).where(
-    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+  const selected = await db.select().from(driveItems).where(
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt), inArray(driveItems.id, body.ids))
   );
-  const selected = rows.filter((r) => body.ids.includes(r.id));
   let created = 0;
   for (const item of selected) {
     await db.insert(driveItems).values({
@@ -415,13 +420,14 @@ files.post("/bulk/tags", authMiddleware, async (c) => {
   if (body.tags !== undefined) updates.tags = body.tags;
   if (body.collections !== undefined) updates.collections = body.collections;
   const rows = await db.select({ id: driveItems.id }).from(driveItems).where(
-    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt), inArray(driveItems.id, body.ids))
   );
-  const ids = rows.map((r) => r.id).filter((id) => body.ids.includes(id));
+  const ids = rows.map((r) => r.id);
   if (ids.length === 0) return c.json({ error: "Bad Request", message: "Tidak ada item yang dipilih" }, 400);
-  for (const id of ids) {
-    await db.update(driveItems).set(updates).where(eq(driveItems.id, id));
-  }
+  // Single UPDATE dengan IN clause — satu round-trip DB untuk semua item
+  await db.update(driveItems).set(updates).where(
+    and(eq(driveItems.userId, userId), inArray(driveItems.id, ids))
+  );
   return c.json({ data: { updated: ids.length } });
 });
 
