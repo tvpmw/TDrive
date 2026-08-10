@@ -124,9 +124,9 @@ export async function getForumTopics(
     const result = await client.invoke(
       new Api.channels.GetForumTopics({
         channel,
-        offset_date: 0,
-        offset_id: 0,
-        offset_topic: 0,
+        offsetDate: 0,
+        offsetId: 0,
+        offsetTopic: 0,
         limit: 100,
       })
     );

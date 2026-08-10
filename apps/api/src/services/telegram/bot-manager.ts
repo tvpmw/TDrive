@@ -64,7 +64,7 @@ export async function startBot(userId: string, token?: string): Promise<{ ok: bo
     registerBotCommands(bot, userId);
 
     // Prevent unhandled Grammy errors from crashing the process
-    bot.catch = (err) => {
+    bot.errorHandler = (err) => {
       console.error(`[Bot] Unhandled error for user ${userId}:`, err.message);
     };
 
@@ -73,15 +73,14 @@ export async function startBot(userId: string, token?: string): Promise<{ ok: bo
     // Start polling in background
     const pollingPromise = bot.start({
       onStart: () => console.log(`[Bot] Started for user ${userId}`),
-      onStop: () => {
-        console.log(`[Bot] Stopped for user ${userId}`);
+    }).finally(() => {
+      // Cleanup state saat polling berhenti (termasuk stop via stopBot)
+      if (activeBots.get(userId) === bot) {
         activeBots.delete(userId);
-        botPolling.delete(userId);
-      },
+      }
+      botPolling.delete(userId);
     }).catch((err) => {
       console.error(`[Bot] Polling error for user ${userId}:`, err.message);
-      activeBots.delete(userId);
-      botPolling.delete(userId);
     });
 
     botPolling.set(userId, pollingPromise);

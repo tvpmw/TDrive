@@ -2,6 +2,7 @@
  * Telegram file storage — upload/download files to a private channel.
  */
 import { Api } from "telegram";
+import bigInt from "big-integer";
 import { CustomFile } from "telegram/client/uploads.js";
 import { getClient, resolveChannel, findChannel, type TelegramCredentials } from "./client.js";
 import { getEnv } from "../../env.js";
@@ -122,7 +123,7 @@ export async function downloadFile(
       const { Api } = await import("telegram");
       const result = await client.invoke(
         new Api.channels.GetChannels({
-          id: [new Api.InputChannel({ channelId: fullId, accessHash: 0n })],
+          id: [new Api.InputChannel({ channelId: bigInt(fullId), accessHash: bigInt(0) })],
         })
       );
       if ("chats" in result && Array.isArray(result.chats) && result.chats.length > 0) {
