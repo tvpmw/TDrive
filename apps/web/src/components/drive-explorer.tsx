@@ -8,7 +8,7 @@ import {
   File, Folder, Upload, Trash2, Search, FolderPlus, Cloud, CloudOff,
   Download, Edit3, HardDrive, LayoutGrid, List, MoreHorizontal,
   Image, Film, Music, Archive, Code, FileText, RefreshCw, ArrowUpRight,
-  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images, History, Tag, Copy,
+  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images, History, Tag, Copy, Link2, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,8 @@ import { CommandPaletteTrigger } from "@/components/command-palette";
 import { BatchRenameModal } from "@/components/batch-rename-modal";
 import { RevisionsDialog } from "@/components/revisions-dialog";
 import { TagEditorDialog } from "@/components/tag-editor-dialog";
+import { UploadUrlDialog } from "@/components/upload-url-dialog";
+import { ActivityDialog } from "@/components/activity-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -117,6 +119,8 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const [revisionsItem, setRevisionsItem] = useState<{ id: string; name: string } | null>(null);
   const [tagEditorItem, setTagEditorItem] = useState<DriveItem | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [showUploadUrl, setShowUploadUrl] = useState(false);
+  const [activityItem, setActivityItem] = useState<{ id: string; name: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -830,6 +834,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           <Button size="sm" className="h-8 px-2 sm:px-3 text-xs" onClick={() => fileInputRef.current?.click()} aria-label="Upload file">
             <Upload className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Upload</span>
           </Button>
+          <Button size="sm" variant="outline" className="h-8 px-2 sm:px-3 text-xs" onClick={() => setShowUploadUrl(true)} aria-label="Upload dari URL" title="Upload file dari link">
+            <Link2 className="h-3.5 w-3.5 sm:mr-1 text-sky-400" /><span className="hidden sm:inline">URL</span>
+          </Button>
           <Button variant="outline" size="sm" className="h-8 px-2 sm:px-3 text-xs" onClick={() => folderInputRef.current?.click()} aria-label="Upload folder">
             <FolderPlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Upload Folder</span>
           </Button>
@@ -1037,6 +1044,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                                 <DropdownMenuItem onClick={() => setTagEditorItem(item)}>
                                   <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setActivityItem({ id: item.id, name: item.name })}>
+                                  <Activity className="h-4 w-4 mr-2 text-sky-400" /> Aktivitas
+                                </DropdownMenuItem>
                                 {item.syncStatus !== "synced" && (
                                   <DropdownMenuItem onClick={() => syncMutation.mutate(item.id)}>
                                     <Cloud className="h-4 w-4 mr-2" /> Sync to Telegram
@@ -1069,6 +1079,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                         <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
                         <ContextMenuItem onClick={() => setTagEditorItem(item)}>
                           <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => setActivityItem({ id: item.id, name: item.name })}>
+                          <Activity className="h-4 w-4 mr-2 text-sky-400" /> Aktivitas
                         </ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
@@ -1141,6 +1154,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                         <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
                         <ContextMenuItem onClick={() => setTagEditorItem(item)}>
                           <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
+                        </ContextMenuItem>
+                        <ContextMenuItem onClick={() => setActivityItem({ id: item.id, name: item.name })}>
+                          <Activity className="h-4 w-4 mr-2 text-sky-400" /> Aktivitas
                         </ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
@@ -1247,6 +1263,22 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           onRestored={() => {
             queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
             queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
+          }}
+        />
+        <ActivityDialog
+          itemId={activityItem?.id ?? ""}
+          itemName={activityItem?.name ?? ""}
+          open={!!activityItem}
+          onOpenChange={(open) => !open && setActivityItem(null)}
+        />
+        <UploadUrlDialog
+          open={showUploadUrl}
+          onOpenChange={setShowUploadUrl}
+          parentId={parentId ?? undefined}
+          onUploaded={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
+            queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.storageUsage() });
           }}
         />
         <TagEditorDialog

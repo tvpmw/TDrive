@@ -10,6 +10,7 @@ import { botLinks } from "../../db/schema/bot.js";
 import { eq, and, isNull, ilike, desc, sql } from "drizzle-orm";
 import { linkTelegramUser, getUserByTelegramId, setChatState, getChatState, clearChatState } from "./bot-manager.js";
 import { downloadFile, uploadFile } from "./storage.js";
+import { searchNaturalLanguage } from "../nl-search.js";
 import { getClient, findChannel, getForumTopics } from "./client.js";
 import { decryptGlobal } from "../../lib/crypto.js";
 import { getEnv } from "../../env.js";
@@ -56,6 +57,43 @@ function getFileIcon(name: string): string {
   if (["xls", "xlsx"].includes(ext)) return "📊";
   if (["js", "ts", "py", "go"].includes(ext)) return "💻";
   return "📁";
+}
+
+// Simpan snippet teks sebagai file .txt di folder Inbox user
+async function saveSnippet(tdriveUserId: string, text: string) {
+  const TEMP_DIR = resolve("./storage-temp");
+  await mkdir(TEMP_DIR, { recursive: true });
+
+  // Pastikan folder Inbox ada
+  let [inbox] = await db.select().from(driveItems).where(
+    and(eq(driveItems.userId, tdriveUserId), eq(driveItems.kind, "folder"), eq(driveItems.name, "Inbox"), isNull(driveItems.parentId), isNull(driveItems.deletedAt))
+  ).limit(1);
+  if (!inbox) {
+    const inboxId = nanoid(16);
+    await db.insert(driveItems).values({ id: inboxId, userId: tdriveUserId, kind: "folder", name: "Inbox", size: 0 });
+    [inbox] = await db.select().from(driveItems).where(eq(driveItems.id, inboxId)).limit(1);
+  }
+
+  const buf = Buffer.from(text, "utf-8");
+  const name = `snippet-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}.txt`;
+  const fileUuid = nanoid(20);
+  await writeFile(join(TEMP_DIR, fileUuid), buf);
+  const { createHash } = await import("node:crypto");
+  const fileHash = createHash("sha256").update(buf).digest("hex");
+
+  await db.insert(driveItems).values({
+    id: nanoid(16),
+    userId: tdriveUserId,
+    kind: "file",
+    name,
+    parentId: inbox.id,
+    size: buf.length,
+    mimeType: "text/plain",
+    storageRemoteId: `local://${fileUuid}`,
+    storageProvider: "local",
+    syncStatus: "local",
+    fileHash,
+  });
 }
 
 export function registerBotCommands(bot: Bot, tdriveUserId: string) {
@@ -173,6 +211,8 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       `/upload — Send a file to store in TDrive\n` +
       `/dl <url> — Download file from URL langsung ke drive\n` +
       `/remind <durasi> <pesan> — Pengingat (contoh: /remind 30m Backup file)\n` +
+      `/ask <query> — Tanya storage dengan natural language\n` +
+      `/note <teks> — Simpan teks cepat ke folder Inbox (snippet sync)\n` +
       `/cancel — Cancel current operation`,
       { parse_mode: "Markdown" }
     );
@@ -1009,6 +1049,44 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
     );
   });
 
+  // /ask <query> — Tanya soal storage dengan natural language
+  bot.command("ask", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+    const query = ctx.match?.trim();
+    if (!query) {
+      return ctx.reply(
+        `🤖 *TDrive Assistant*\n\n` +
+        `Tanya soal file Anda dengan bahasa alami!\n\n` +
+        `Contoh:\n` +
+        `• /ask video terbaru\n` +
+        `• /ask foto bulan lalu\n` +
+        `• /ask dokumen > 50 MB\n` +
+        `• /ask file tag:kerjaan`,
+        { parse_mode: "Markdown" }
+      );
+    }
+    const statusMsg = await ctx.reply("🤖 Mencari…");
+    try {
+      const result = await searchNaturalLanguage(tdriveUserId, query);
+      await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id);
+      await ctx.reply(result.answer || "Tidak ada hasil.", { parse_mode: "Markdown" });
+    } catch (err: any) {
+      await ctx.reply(`❌ Gagal: ${err?.message || "unknown"}`);
+    }
+  });
+
+  // /note <teks> — Simpan teks cepat sebagai file di folder Inbox (snippet sync)
+  bot.command("note", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+    const text = ctx.match?.trim();
+    if (text) {
+      await saveSnippet(tdriveUserId, text);
+      return ctx.reply(`📝 Snippet tersimpan ke Inbox!\n\n> ${text.slice(0, 120)}${text.length > 120 ? "…" : ""}`);
+    }
+    await setChatState(tdriveUserId, tdriveUserId, String(ctx.chat?.id ?? ""), "awaiting_note", "");
+    return ctx.reply("📝 Kirim teks apapun, saya akan simpan sebagai file di folder Inbox. /cancel untuk batal.");
+  });
+
   // /dl <url> — Download file dari URL langsung ke lokal storage
   bot.command("dl", async (ctx) => {
     if (!(await requireAuth(ctx))) return;
@@ -1152,6 +1230,25 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
         );
       }
       await clearChatState(tgUserId);
+    }
+
+    // Handle snippet capture
+    if (chatState.state === "awaiting_note") {
+      const text = ctx.message.text.trim();
+      await clearChatState(tgUserId);
+      if (text.startsWith("/") || text.length === 0) {
+        return ctx.reply("Batal — tidak ada teks untuk disimpan.");
+      }
+      try {
+        await saveSnippet(tdriveUserId, text);
+        await ctx.reply(
+          `📝 Snippet tersimpan ke Inbox!\n\n> ${text.slice(0, 120)}${text.length > 120 ? "…" : ""}\n\nCek di folder *Inbox* di drive Anda.`,
+          { parse_mode: "Markdown" }
+        );
+      } catch (err: any) {
+        await ctx.reply(`❌ Gagal menyimpan snippet: ${err?.message || "unknown"}`);
+      }
+      return;
     }
   });
 }

@@ -8,7 +8,7 @@ import { authMiddleware, type Variables } from "../middleware/auth.js";
 import { hashPassword, verifyPassword } from "../lib/bcrypt.js";
 import { randomUUID } from "node:crypto";
 import { downloadFile } from "../services/telegram/index.js";
-import { emitActivity } from "../lib/event-bus.js";
+import { emitActivity, logFileActivity } from "../lib/event-bus.js";
 import { decryptGlobal } from "../lib/crypto.js";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -188,6 +188,7 @@ publicShareRoutes.post("/:token/download", async (c) => {
   await db.update(driveItems).set({
     downloadCount: newCount,
   }).where(eq(driveItems.id, item.id));
+  logFileActivity(item.userId, item.id, "share.downloaded", `File diunduh via share link (total ${newCount}x)`);
 
   // Self-destruct: setelah unduhan terakhir, hapus file + revoke link
   if (item.isSelfDestruct === 1 && item.maxDownloads !== null && newCount >= item.maxDownloads) {

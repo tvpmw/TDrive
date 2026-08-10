@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { db } from "../db/index.js";
 import { driveItems } from "../db/schema/drive-items.js";
-import { shareAnalytics, fileRevisions, storageChannels } from "../db/schema/advanced-features.js";
+import { shareAnalytics, fileRevisions, storageChannels, fileActivityLog } from "../db/schema/advanced-features.js";
 import { eq, desc, sql, like, and, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { logFileActivity } from "../lib/event-bus.js";
+import { searchNaturalLanguage } from "../services/nl-search.js";
 import { downloadFile } from "../services/telegram/index.js";
 import { decryptGlobal } from "../lib/crypto.js";
 import { users } from "../db/schema/users.js";
@@ -70,6 +72,21 @@ function isTextItem(name: string, mimeType: string | null, size: number): boolea
   return TEXT_EXTENSIONS.includes(ext);
 }
 
+// Timeline aktivitas per file
+advancedRouter.get("/files/:id/activity", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const itemId = c.req.param("id");
+  const [item] = await db.select().from(driveItems)
+    .where(and(eq(driveItems.id, itemId), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+    .limit(1);
+  if (!item) return c.json({ error: "Not Found", message: "File not found" }, 404);
+  const logs = await db.select().from(fileActivityLog)
+    .where(and(eq(fileActivityLog.itemId, itemId), eq(fileActivityLog.userId, userId)))
+    .orderBy(desc(fileActivityLog.createdAt))
+    .limit(50);
+  return c.json({ data: logs });
+});
+
 // Ambil konten teks item saat ini (untuk diff)
 advancedRouter.get("/files/:id/content", authMiddleware, async (c) => {
   const userId = c.get("userId");
@@ -134,125 +151,10 @@ advancedRouter.get("/search", authMiddleware, async (c) => {
 advancedRouter.post("/assistant", authMiddleware, async (c) => {
   const userId = c.get("userId");
   const { query } = await c.req.json() as { query: string };
-  if (!query || !query.trim()) {
-    return c.json({ answer: "Silakan tulis pertanyaan tentang file Anda.", items: [] });
-  }
 
-  // Natural language parsing
-  const explainParts: string[] = [];
-  const conditions: ReturnType<typeof sql>[] = [
-    sql`${driveItems.userId} = ${userId}`,
-    sql`${driveItems.deletedAt} IS NULL`,
-  ];
-  const lower = query.toLowerCase().trim();
-
-  // Type extensions mapping
-  const TYPE_EXT_MAP: Record<string, string[]> = {
-    foto: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
-    photo: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
-    gambar: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
-    image: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
-    video: ["mp4", "mkv", "avi", "mov", "webm", "flv"],
-    music: ["mp3", "wav", "flac", "ogg", "m4a", "aac"],
-    audio: ["mp3", "wav", "flac", "ogg", "m4a", "aac"],
-    document: ["pdf", "doc", "docx", "txt", "md", "xls", "xlsx", "ppt", "pptx", "json", "csv"],
-    pdf: ["pdf"],
-    archive: ["zip", "rar", "7z", "tar", "gz", "bz2"],
-    apk: ["apk"],
-  };
-
-  // Build conditions without modifying a shared string — parse from original query each time
-  let hasDateFilter = false;
-  let freeText = lower;
-
-  // 1. Tag filter (before other transforms)
-  const tagPattern = /(?:^|\s)(?:tag\s*[:#]?|#)([a-z0-9_-]+)/i;
-  const tagMatch = lower.match(tagPattern);
-  if (tagMatch) {
-    const tag = tagMatch[1].toLowerCase();
-    conditions.push(sql`${driveItems.tags} ILIKE ${`%${tag}%`}`);
-    explainParts.push(`tag #${tag}`);
-  }
-
-  // 2. Type filter
-  for (const [typeName, exts] of Object.entries(TYPE_EXT_MAP)) {
-    if (lower.includes(typeName)) {
-      conditions.push(sql`LOWER(${driveItems.name}) ~ ${`(${exts.map((e) => `.${e}`).join("|")})$`}`);
-      explainParts.push(`tipe ${typeName}`);
-      break;
-    }
-  }
-
-  // 3. Size filter
-  const sizeMatch = lower.match(/([<>])\s*(\d+)\s*(mb|gb|kb)/i);
-  if (sizeMatch) {
-    const op = sizeMatch[1];
-    const val = parseInt(sizeMatch[2], 10);
-    const unit = sizeMatch[3].toLowerCase();
-    const bytes = unit === "gb" ? val * 1024 * 1024 * 1024 : unit === "mb" ? val * 1024 * 1024 : val * 1024;
-    conditions.push(sql`${driveItems.size} ${sql.raw(op)} ${bytes}`);
-    explainParts.push(`ukuran ${op} ${val} ${unit}`);
-  }
-  if (lower.includes("besar")) {
-    conditions.push(sql`${driveItems.size} > ${100 * 1024 * 1024}`);
-    if (!sizeMatch) explainParts.push("ukuran > 100 MB");
-  }
-  if (lower.includes("kecil")) {
-    conditions.push(sql`${driveItems.size} < ${1024 * 1024}`);
-    if (!sizeMatch) explainParts.push("ukuran < 1 MB");
-  }
-
-  // 4. Time filter
-  const now = new Date();
-  if (lower.includes("hari ini") || lower.includes("today")) {
-    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getFullYear(), now.getMonth(), now.getDate())}`);
-    explainParts.push("hari ini"); hasDateFilter = true;
-  }
-  if (lower.includes("minggu lalu") || lower.includes("last week")) {
-    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getTime() - 7 * 86400000)}`);
-    explainParts.push("minggu lalu"); hasDateFilter = true;
-  }
-  if (lower.includes("bulan lalu") || lower.includes("last month")) {
-    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getTime() - 30 * 86400000)}`);
-    explainParts.push("bulan lalu"); hasDateFilter = true;
-  }
-  const isNewest = lower.includes("baru") || lower.includes("terbaru");
-  if (isNewest) explainParts.push("terbaru");
-
-  // 5. Free text: use entire query minus special patterns, sanitize
-  let searchText = lower
-    .replace(tagPattern, "")
-    .replace(/[<>]\s*\d+\s*(mb|gb|kb)/gi, "")
-    .replace(/besar|kecil|hari ini|today|minggu lalu|last week|bulan lalu|last month|baru|terbaru|foto|photo|gambar|image|video|music|audio|document|pdf|archive|apk/gi, "")
-    .replace(/[^a-z0-9\s.-]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (searchText) {
-    conditions.push(sql`(LOWER(${driveItems.name}) LIKE ${`%${searchText}%`} OR LOWER(${driveItems.extractedText}) LIKE ${`%${searchText}%`})`);
-    explainParts.push(`"${searchText}"`);
-  }
-
-  const items = await db.select().from(driveItems)
-    .where(and(...conditions))
-    .orderBy(desc(driveItems.createdAt))
-    .limit(20);
-
-  const rows = items as any[];
-  const totalSize = rows.reduce((s: number, r: any) => s + (r.size || 0), 0);
-
-  let answer = `🔍 Ditemukan **${rows.length} file** ${explainParts.length > 0 ? `(${explainParts.join(", ")})` : ""}.`;
-  if (rows.length > 0) {
-    const top = rows.slice(0, 5).map((r: any, i: number) => {
-      const icon = r.kind === "folder" ? "📂" : "📄";
-      const sizeStr = r.size ? `(${(r.size / 1024 / 1024).toFixed(1)} MB)` : "";
-      return `${i + 1}. ${icon} **${r.name}** ${sizeStr}`;
-    }).join("\n");
-    answer += `\n\n${top}`;
-    if (rows.length > 5) answer += `\n…dan ${rows.length - 5} lainnya.`;
-    answer += `\n\n💾 Total: ${(totalSize / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  }
-
-  return c.json({ answer, items: rows });
+  // Natural language parsing — shared engine (dipakai juga oleh bot /ask)
+  const result = await searchNaturalLanguage(userId, query);
+  return c.json({ answer: result.answer, items: result.items, explain: result.explain });
 });
 
 // 2. Storage Cleaner & Duplicate Finder (Hash & Name matching)
@@ -394,6 +296,7 @@ advancedRouter.post("/files/:id/revisions/:revisionId/restore", authMiddleware, 
   }).where(eq(driveItems.id, itemId));
 
   const [updated] = await db.select().from(driveItems).where(eq(driveItems.id, itemId)).limit(1);
+  logFileActivity(userId, itemId, "file.restored", `Dikembalikan ke revisi ${revision.revisionNumber}`);
   return c.json({ data: updated, restoredRevision: revision.revisionNumber });
 });
 

@@ -15,12 +15,14 @@ import { decryptGlobal } from "../lib/crypto.js";
 import { uploadFile, downloadFile } from "../services/telegram/index.js";
 import { getNotificationEnabled, sendTelegramNotification } from "../services/telegram/notifications.js";
 import { enqueueSync } from "../queue/index.js";
-import { emitActivity } from "../lib/event-bus.js";
+import { emitActivity, logFileActivity } from "../lib/event-bus.js";
 import { fileRevisions } from "../db/schema/advanced-features.js";
 import { nanoid } from "nanoid";
 import type { TelegramCredentials } from "../services/telegram/client.js";
 import { EDITABLE_EXTENSIONS } from "@tdrive/shared";
 import { buildZip, fetchFileBuffer } from "./folders.js";
+import { extractText } from "../services/text-extractor.js";
+import { runAutomationOnUpload } from "../services/automation-engine.js";
 
 const files = new Hono<{ Variables: Variables }>();
 
@@ -199,7 +201,10 @@ files.post("/upload", authMiddleware, async (c) => {
   const remoteId = `local://${fileUuid}`;
   const stagedPath = join(TEMP_DIR, fileUuid);
   const buffer = Buffer.from(await file.arrayBuffer());
-  
+
+  // Ekstrak teks untuk pencarian dalam konten (PDF/DOCX/teks biasa)
+  const extractedText = extractText(file.name, buffer);
+
   // Calculate SHA256 Hash for instant upload deduplication
   const cryptoModule = await import("node:crypto");
   const fileHash = cryptoModule.createHash("sha256").update(buffer).digest("hex");
@@ -253,6 +258,7 @@ files.post("/upload", authMiddleware, async (c) => {
       storageChannelName: "TeleDrive Storage",
       syncStatus: "local",
       fileHash,
+      extractedText: extractedText || null,
       isEncrypted: isEncrypted ? 1 : sameNameItem.isEncrypted ?? 0,
       encryptionIv: isEncrypted ? encryptionIv : sameNameItem.encryptionIv,
       keySalt: isEncrypted ? keySalt : sameNameItem.keySalt,
@@ -262,6 +268,7 @@ files.post("/upload", authMiddleware, async (c) => {
     const [item] = await db.select().from(driveItems).where(eq(driveItems.id, sameNameItem.id)).limit(1);
     const createdItem = item;
     runBackgroundSync(userId, createdItem, stagedPath);
+    logFileActivity(userId, sameNameItem.id, "file.versioned", `Versi baru dibuat (v${revNumber + 1}), revisi lama disimpan`);
 
     emitActivity({
       type: "file.uploaded",
@@ -307,6 +314,16 @@ files.post("/upload", authMiddleware, async (c) => {
       itemName: item?.name ?? file.name,
       userId,
     });
+    if (item) {
+      void runAutomationOnUpload({
+        userId,
+        itemId: item.id,
+        itemName: item.name,
+        itemSize: item.size,
+        mimeType: item.mimeType,
+        parentId: item.parentId,
+      }).catch(() => {});
+    }
     return c.json({ data: item, instantUpload: true }, 201);
   }
 
@@ -326,6 +343,7 @@ files.post("/upload", authMiddleware, async (c) => {
     storageChannelName: "TeleDrive Storage",
     syncStatus: "local",
     fileHash: fileHash,
+    extractedText: extractedText || null,
     isEncrypted: isEncrypted ? 1 : 0,
     encryptionIv: isEncrypted ? encryptionIv : null,
     keySalt: isEncrypted ? keySalt : null,
@@ -334,6 +352,7 @@ files.post("/upload", authMiddleware, async (c) => {
   const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
   const createdItem = item;
   runBackgroundSync(userId, createdItem, stagedPath);
+  logFileActivity(userId, id, "file.uploaded", `File “${createdItem.name}” diunggah`);
 
   emitActivity({
     type: "file.uploaded",
@@ -341,7 +360,166 @@ files.post("/upload", authMiddleware, async (c) => {
     itemName: createdItem.name,
     userId,
   });
+  // Jalankan rules auto-organize (fire-and-forget, tidak blokir response)
+  void runAutomationOnUpload({
+    userId,
+    itemId: createdItem.id,
+    itemName: createdItem.name,
+    itemSize: createdItem.size,
+    mimeType: createdItem.mimeType,
+    parentId: createdItem.parentId,
+  }).then(() => {}).catch(() => {});
   return c.json({ data: createdItem }, 201);
+});
+
+// Upload via URL (server-side fetch → lokal storage)
+files.post("/upload-url", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  await ensureTempDir();
+  const body = z.parse(
+    z.object({ url: z.string().url(), parent_id: z.string().nullable().optional() }),
+    await c.req.json()
+  );
+  const url = body.url;
+  const parentId = body.parent_id ?? null;
+
+  // Proteksi SSRF dasar: tolak URL ke localhost/internal
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0" || host.endsWith(".local") || /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])/.test(host)) {
+      return c.json({ error: "Bad Request", message: "URL internal tidak diizinkan", statusCode: 400 }, 400);
+    }
+  } catch {
+    return c.json({ error: "Bad Request", message: "URL tidak valid", statusCode: 400 }, 400);
+  }
+
+  // Helper: cek hostname bukan internal (dipakai untuk tiap hop redirect)
+  const isInternalHost = (u: URL): boolean => {
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0") return true;
+    if (host.endsWith(".local") || host.endsWith(".localhost")) return true;
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])|169\.254\.)/.test(host)) return true;
+    // IPv4-mapped / hex / octal / decimal forms
+    if (/^0x/i.test(host) || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      const parts = host.split(".").map((p) => {
+        if (/^0x/i.test(p)) return parseInt(p, 16);
+        if (p.startsWith("0") && p.length > 1) return parseInt(p, 8);
+        return parseInt(p, 10);
+      });
+      if (parts.some((n) => isNaN(n))) return true;
+      const [a, b, c2, d] = parts;
+      if (a === 127 || a === 0 || a === 10) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 169 && b === 254) return true;
+      if (a >= 224) return true;
+      void c2; void d;
+    }
+    return false;
+  };
+
+  let resp: Response | undefined;
+  try {
+    let currentUrl = url;
+    for (let hop = 0; hop < 5; hop++) {
+      const checkUrl = new URL(currentUrl);
+      if (isInternalHost(checkUrl)) {
+        return c.json({ error: "Bad Request", message: "URL internal tidak diizinkan", statusCode: 400 }, 400);
+      }
+      resp = await fetch(currentUrl, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(90_000),
+        headers: { "User-Agent": "TDrive/1.0" },
+      });
+      if (resp.status >= 300 && resp.status < 400) {
+        const loc = resp.headers.get("location");
+        if (!loc) break;
+        currentUrl = new URL(loc, currentUrl).toString();
+        resp.body?.cancel();
+        continue;
+      }
+      break;
+    }
+  } catch (err: any) {
+    return c.json({ error: "Bad Gateway", message: "Gagal mengambil URL: " + (err?.message || "unknown"), statusCode: 502 }, 502);
+  }
+  if (!resp || !resp.ok) {
+    return c.json({ error: "Bad Gateway", message: `URL merespon HTTP ${resp?.status ?? "unknown"}`, statusCode: 502 }, 502);
+  }
+
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const env = getEnv();
+  if (buf.length > env.TDRIVE_MAX_UPLOAD_BYTES) {
+    return c.json({ error: "Payload Too Large", message: "File melebihi batas upload", statusCode: 413 }, 413);
+  }
+
+  // Nama file dari URL pathname, fallback ke random
+  let name = "";
+  try {
+    const pathname = decodeURIComponent(new URL(url).pathname);
+    name = pathname.split("/").filter(Boolean).pop() ?? "";
+  } catch {}
+  if (!name) name = `download-${Date.now()}`;
+  // Cek duplikat nama di folder yang sama → suffix (1)
+  let finalName = name;
+  const clashWhere = parentId
+    ? and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, finalName), eq(driveItems.parentId, parentId), isNull(driveItems.deletedAt))
+    : and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, finalName), isNull(driveItems.parentId), isNull(driveItems.deletedAt));
+  let clash = await db.select({ id: driveItems.id }).from(driveItems).where(clashWhere).limit(1);
+  let suffix = 1;
+  while (clash.length > 0) {
+    const dot = name.lastIndexOf(".");
+    finalName = dot > 0 ? `${name.slice(0, dot)} (${suffix})${name.slice(dot)}` : `${name} (${suffix})`;
+    const w2 = parentId
+      ? and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, finalName), eq(driveItems.parentId, parentId), isNull(driveItems.deletedAt))
+      : and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, finalName), isNull(driveItems.parentId), isNull(driveItems.deletedAt));
+    clash = await db.select({ id: driveItems.id }).from(driveItems).where(w2).limit(1);
+    suffix++;
+  }
+
+  const fileUuid = randomUUID();
+  const stagedPath = join(TEMP_DIR, fileUuid);
+  await writeFile(stagedPath, buf);
+  const cryptoModule = await import("node:crypto");
+  const fileHash = cryptoModule.createHash("sha256").update(buf).digest("hex");
+  const mimeType = resp.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+
+  const id = newId();
+  await db.insert(driveItems).values({
+    id,
+    userId,
+    kind: "file",
+    name: finalName,
+    parentId,
+    size: buf.length,
+    mimeType,
+    storageRemoteId: `local://${fileUuid}`,
+    storageProvider: "local",
+    storageChannelName: "TeleDrive Storage",
+    syncStatus: "local",
+    fileHash,
+    extractedText: extractText(finalName, buf) || null,
+    isEncrypted: 0,
+  });
+
+  const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
+  runBackgroundSync(userId, item, stagedPath);
+  emitActivity({
+    type: "file.uploaded",
+    message: `File “${finalName}” diunggah dari URL`,
+    itemName: finalName,
+    userId,
+  });
+  void runAutomationOnUpload({
+    userId,
+    itemId: item.id,
+    itemName: item.name,
+    itemSize: item.size,
+    mimeType: item.mimeType,
+    parentId: item.parentId,
+  }).catch(() => {});
+  return c.json({ data: item }, 201);
 });
 
 // Bulk: download beberapa file sekaligus sebagai ZIP
@@ -717,6 +895,7 @@ files.delete("/:id", authMiddleware, async (c) => {
     itemName: item.name,
     userId,
   });
+  logFileActivity(userId, id, "file.deleted", `File dipindah ke Trash`);
   return c.body(null, 204);
 });
 

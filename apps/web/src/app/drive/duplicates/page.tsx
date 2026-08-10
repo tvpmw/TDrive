@@ -11,9 +11,42 @@ import {
   Loader2, AlertCircle, FileText, Sparkles, Star, Check
 } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
+import { DiffView, DiffLoading, DiffError } from "@/components/diff-view";
+import { GitCompareArrows, ChevronDown, ChevronUp } from "lucide-react";
 
 export default function DuplicateFinderPage() {
   const queryClient = useQueryClient();
+  const [compareState, setCompareState] = useState<{ hash: string; status: "loading" | "ok" | "error"; oldText: string; newText: string; oldLabel: string; newLabel: string; message?: string } | null>(null);
+
+  // Bandingkan konten 2 duplikat (via /advanced/files/:id/content untuk file teks)
+  const loadCompare = async (group: any) => {
+    const sorted = [...group.items].sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const first = sorted[0];
+    const second = sorted[1] ?? sorted[0];
+    setCompareState({ hash: group.hash, status: "loading", oldText: "", newText: "", oldLabel: first?.name ?? "", newLabel: second?.name ?? "" });
+    try {
+      const [a, b] = await Promise.all([
+        apiClient.get(`/api/advanced/files/${first.id}/content`).catch(() => null),
+        apiClient.get(`/api/advanced/files/${second.id}/content`).catch(() => null),
+      ]);
+      setCompareState({
+        hash: group.hash,
+        status: "ok",
+        oldText: a?.data?.content ?? "",
+        newText: b?.data?.content ?? "",
+        oldLabel: first?.name ?? "Versi 1",
+        newLabel: second?.name ?? "Versi 2",
+      });
+    } catch (err: any) {
+      setCompareState({
+        hash: group.hash,
+        status: "error",
+        oldText: "", newText: "",
+        oldLabel: first?.name ?? "", newLabel: second?.name ?? "",
+        message: err?.response?.data?.message || err?.message || "File bukan teks atau gagal dimuat",
+      });
+    }
+  };
   const [storageFilter, setStorageFilter] = useState<"all" | "telegram" | "server">("all");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -197,6 +230,15 @@ export default function DuplicateFinderPage() {
                         >
                           <Sparkles className="h-3 w-3 mr-1 text-amber-300" /> Smart Clean (Keep 1 Original)
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => compareState?.hash === group.hash ? setCompareState(null) : loadCompare(group)}
+                          className="h-6 text-[11px] border-sky-500/40 text-sky-300 hover:bg-sky-950/40"
+                        >
+                          <GitCompareArrows className="h-3 w-3 mr-1" /> Compare
+                          {compareState?.hash === group.hash ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
+                        </Button>
                       </div>
                     </div>
 
@@ -250,6 +292,21 @@ export default function DuplicateFinderPage() {
                         );
                       })}
                     </div>
+
+                    {compareState && compareState.hash === group.hash && (
+                      <div className="pt-2">
+                        {compareState.status === "loading" && <DiffLoading />}
+                        {compareState.status === "error" && <DiffError message={compareState.message ?? "Gagal memuat konten"} />}
+                        {compareState.status === "ok" && (
+                          <DiffView
+                            oldText={compareState.oldText}
+                            newText={compareState.newText}
+                            oldLabel={compareState.oldLabel}
+                            newLabel={compareState.newLabel}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })

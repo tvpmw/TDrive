@@ -52,6 +52,23 @@ export const shareAnalytics = pgTable(
   ]
 );
 
+export const fileActivityLog = pgTable(
+  "file_activity_log",
+  {
+    id: varchar("id", { length: 64 }).primaryKey(),
+    userId: varchar("user_id", { length: 64 }).notNull(),
+    itemId: varchar("item_id", { length: 64 }).notNull(),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    message: text("message").notNull(),
+    meta: jsonb("meta"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("idx_file_activity_item_id").on(table.itemId),
+    index("idx_file_activity_user_id").on(table.userId),
+  ]
+);
+
 export const fileRevisions = pgTable(
   "file_revisions",
   {

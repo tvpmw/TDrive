@@ -1,5 +1,27 @@
+import { db } from "../db/index.js";
+import { fileActivityLog } from "../db/schema/advanced-features.js";
+import { nanoid } from "nanoid";
+
 /** In-memory pub/sub untuk activity realtime (SSE). Antar-worker tidak sync — cukup untuk single-instance. */
 type Listener = (event: ActivityEvent) => void;
+
+// Persist aktivitas per file ke DB (fire-and-forget — tidak memblokir emitter)
+export function logFileActivity(userId: string, itemId: string, eventType: string, message: string, meta?: Record<string, unknown>): void {
+  try {
+    void db.insert(fileActivityLog).values({
+      id: nanoid(16),
+      userId,
+      itemId,
+      eventType,
+      message,
+      meta: meta ?? null,
+    }).catch(() => {
+      // log gagal — jangan crash request utama
+    });
+  } catch {
+    // abaikan
+  }
+}
 
 export interface ActivityEvent {
   type: "file.uploaded" | "file.deleted" | "folder.created" | "share.created" | "share.revoked" | "sync.completed";

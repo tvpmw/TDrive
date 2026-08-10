@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Workflow, Sparkles, ArrowRight, Play, Plus, CheckCircle, FileText, Send, MoveRight, Trash2, SlidersHorizontal, Cpu, Zap, Layers, Network, Shield, FolderOutput, Code2, Sparkle } from "lucide-react";
+import { AutoOrganizeRules } from "@/components/auto-organize-rules";
 
 export default function WorkflowsPage() {
   const [rules, setRules] = useState([
@@ -475,6 +476,21 @@ export default function WorkflowsPage() {
             </Card>
           ))}
         </div>
+
+        {/* Auto-Organize Rules — terhubung ke API nyata */}
+        <Card className="bg-slate-900 border-slate-800">
+          <CardHeader className="pb-3 border-b border-slate-800">
+            <CardTitle className="text-md font-semibold text-emerald-400 flex items-center gap-2">
+              <Zap className="h-5 w-5" /> Auto-Organize Rules (Live)
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Aturan nyata yang dieksekusi server saat file baru diupload.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <AutoOrganizeRules />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
