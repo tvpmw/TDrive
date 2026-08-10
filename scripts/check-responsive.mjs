@@ -108,7 +108,7 @@ async function checkPage(page, label) {
   page.on("console", onConsole);
 
   try {
-    await page.goto(`${BASE}${label.path}`, { waitUntil: "networkidle", timeout: TIMEOUT_MS });
+    await page.goto(`${BASE}${label.path}`, { waitUntil: "load", timeout: TIMEOUT_MS });
   } catch (e) {
     record({ page: label.path, width: label.width, check: "navigasi", pass: false, detail: e.message.slice(0, 120) });
     page.removeListener("pageerror", onPageError);
@@ -222,7 +222,7 @@ async function checkPage(page, label) {
 
 // ------------------------------------------------------------- drawer test ---
 async function checkDrawer(page, width) {
-  await page.goto(`${BASE}/dashboard`, { waitUntil: "networkidle", timeout: TIMEOUT_MS }).catch(() => {});
+  await page.goto(`${BASE}/dashboard`, { waitUntil: "load", timeout: TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(1500);
   const hamburger = page.locator("button.fixed.bottom-4.left-4");
   const drawer = page.locator("div.md\\:hidden.fixed.inset-0.z-\\[60\\]");
