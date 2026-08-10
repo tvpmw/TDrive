@@ -58,6 +58,8 @@ shareRoutes.post("/:id", authMiddleware, async (c) => {
     z.object({
       password: z.string().optional().nullable(),
       expires_in_days: z.number().optional().nullable(),
+      max_downloads: z.number().min(1).max(100000).optional().nullable(),
+      is_self_destruct: z.number().min(0).max(1).optional().nullable(),
     }),
     await c.req.json()
   );
@@ -80,6 +82,8 @@ shareRoutes.post("/:id", authMiddleware, async (c) => {
     shareToken: token,
     sharePasswordHash: passwordHash,
     shareExpiresAt: expiresAt,
+    maxDownloads: body.max_downloads ?? null,
+    isSelfDestruct: body.is_self_destruct ?? 0,
     updatedAt: new Date(),
   }).where(eq(driveItems.id, id));
 
@@ -102,6 +106,8 @@ shareRoutes.delete("/:id", authMiddleware, async (c) => {
     shareToken: null,
     sharePasswordHash: null,
     shareExpiresAt: null,
+    maxDownloads: null,
+    isSelfDestruct: 0,
     updatedAt: new Date(),
   }).where(and(eq(driveItems.id, id), eq(driveItems.userId, userId)));
 
@@ -122,6 +128,10 @@ publicShareRoutes.get("/:token", async (c) => {
 
   const isExpired = item.shareExpiresAt ? new Date() > new Date(item.shareExpiresAt) : false;
 
+  const downloadCount = item.downloadCount ?? 0;
+  const maxDownloads = item.maxDownloads ?? null;
+  const exhausted = maxDownloads !== null && downloadCount >= maxDownloads;
+
   return c.json({
     data: {
       name: item.name,
@@ -130,7 +140,11 @@ publicShareRoutes.get("/:token", async (c) => {
       createdAt: item.createdAt,
       requiresPassword: !!item.sharePasswordHash,
       isExpired,
-      downloadCount: item.downloadCount ?? 0,
+      isExhausted: exhausted,
+      downloadCount,
+      maxDownloads,
+      isSelfDestruct: item.isSelfDestruct === 1,
+      remainingDownloads: maxDownloads !== null ? Math.max(0, maxDownloads - downloadCount) : null,
     },
   });
 });
@@ -155,6 +169,11 @@ publicShareRoutes.post("/:token/download", async (c) => {
     return c.json({ error: "Gone", message: "Share link has expired", statusCode: 410 }, 410);
   }
 
+  const newCount = (item.downloadCount ?? 0) + 1;
+  if (item.maxDownloads !== null && newCount > item.maxDownloads) {
+    return c.json({ error: "Gone", message: "Batas unduhan link ini sudah tercapai", statusCode: 410 }, 410);
+  }
+
   if (item.sharePasswordHash) {
     if (!body.password) {
       return c.json({ error: "Unauthorized", message: "Password required for this share link", statusCode: 401 }, 401);
@@ -167,8 +186,27 @@ publicShareRoutes.post("/:token/download", async (c) => {
 
   // Increment download count
   await db.update(driveItems).set({
-    downloadCount: (item.downloadCount ?? 0) + 1,
+    downloadCount: newCount,
   }).where(eq(driveItems.id, item.id));
+
+  // Self-destruct: setelah unduhan terakhir, hapus file + revoke link
+  if (item.isSelfDestruct === 1 && item.maxDownloads !== null && newCount >= item.maxDownloads) {
+    await db.update(driveItems).set({
+      shareToken: null,
+      sharePasswordHash: null,
+      shareExpiresAt: null,
+      maxDownloads: null,
+      isSelfDestruct: 0,
+      isStarred: item.isStarred,
+      updatedAt: new Date(),
+    }).where(eq(driveItems.id, item.id));
+    emitActivity({
+      type: "share.revoked",
+      message: `Link berbagi “${item.name}” self-destructed setelah ${newCount}x unduhan`,
+      itemName: item.name,
+      userId: item.userId,
+    });
+  }
 
   // Stream/Deliver File
   if (item.storageRemoteId?.startsWith("local://")) {

@@ -5,8 +5,110 @@ import { driveItems } from "../db/schema/drive-items.js";
 import { shareAnalytics, fileRevisions, storageChannels } from "../db/schema/advanced-features.js";
 import { eq, desc, sql, like, and, isNull } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { downloadFile } from "../services/telegram/index.js";
+import { decryptGlobal } from "../lib/crypto.js";
+import { users } from "../db/schema/users.js";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { TelegramCredentials } from "../services/telegram/client.js";
 
 export const advancedRouter = new Hono();
+
+const MAX_TEXT_SIZE = 1024 * 1024; // 1MB — batas aman untuk diff
+
+function resolveLocalPath(remoteId: string): string {
+  const filename = remoteId.replace("local://", "");
+  for (const base of [resolve("./storage-temp"), resolve("./apps/api/storage-temp"), resolve("../../storage-temp")]) {
+    const p = join(base, filename);
+    if (existsSync(p)) return p;
+  }
+  return join(resolve("./storage-temp"), filename);
+}
+
+async function resolveUserCreds(userId: string): Promise<TelegramCredentials | null> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user?.telegramApiIdEncrypted || !user?.telegramApiHashEncrypted || !user?.telegramSessionEncrypted) return null;
+  return {
+    apiId: parseInt(decryptGlobal(user.telegramApiIdEncrypted), 10),
+    apiHash: decryptGlobal(user.telegramApiHashEncrypted),
+    sessionString: decryptGlobal(user.telegramSessionEncrypted),
+  };
+}
+
+// Ambil buffer dari remoteId mana pun (local:// atau telegram://)
+async function fetchRemoteBuffer(userId: string, storageRemoteId: string | null): Promise<Buffer | null> {
+  const remoteId = storageRemoteId ?? "";
+  if (remoteId.startsWith("local://")) {
+    const p = resolveLocalPath(remoteId);
+    if (existsSync(p)) return await readFile(p);
+    return null;
+  }
+  if (remoteId.startsWith("telegram://")) {
+    const clean = remoteId.replace(/^telegram:\/\//, "");
+    const [channelIdStr, messageIdStr] = clean.split("/");
+    const channelId = parseInt(channelIdStr, 10);
+    const messageId = parseInt(messageIdStr, 10);
+    if (isNaN(channelId) || isNaN(messageId)) return null;
+    const creds = await resolveUserCreds(userId);
+    if (!creds) return null;
+    try {
+      const { buffer } = await downloadFile(userId, creds, channelId, messageId, 0, MAX_TEXT_SIZE + 1);
+      return buffer;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+const TEXT_EXTENSIONS = ["txt", "md", "json", "csv", "log", "xml", "yml", "yaml", "ini", "conf", "sh", "js", "ts", "tsx", "jsx", "css", "html", "htm", "py", "go", "rs", "java", "c", "cpp", "h", "sql", "toml", "env", "gitignore", "svg"];
+function isTextItem(name: string, mimeType: string | null, size: number): boolean {
+  if (size > MAX_TEXT_SIZE) return false;
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (mimeType?.startsWith("text/") || mimeType?.includes("json") || mimeType?.includes("xml") || mimeType?.includes("javascript") || mimeType?.includes("typescript")) return true;
+  return TEXT_EXTENSIONS.includes(ext);
+}
+
+// Ambil konten teks item saat ini (untuk diff)
+advancedRouter.get("/files/:id/content", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const itemId = c.req.param("id");
+  const [item] = await db.select().from(driveItems)
+    .where(and(eq(driveItems.id, itemId), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+    .limit(1);
+  if (!item) return c.json({ error: "Not Found", message: "File not found" }, 404);
+  if (item.kind !== "file") return c.json({ error: "Bad Request", message: "Hanya file yang punya konten teks" }, 400);
+  if (!isTextItem(item.name, item.mimeType, item.size)) {
+    return c.json({ error: "Unsupported", message: "File bukan teks — diff hanya untuk file teks" }, 415);
+  }
+  const buffer = await fetchRemoteBuffer(userId, item.storageRemoteId);
+  if (!buffer) return c.json({ error: "Not Found", message: "Konten tidak tersedia" }, 404);
+  return c.json({ content: buffer.toString("utf-8") });
+});
+
+// Ambil konten teks sebuah revisi (untuk diff)
+advancedRouter.get("/files/:id/revisions/:revisionId/content", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const itemId = c.req.param("id");
+  const revisionId = c.req.param("revisionId");
+
+  const [item] = await db.select().from(driveItems)
+    .where(and(eq(driveItems.id, itemId), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+    .limit(1);
+  if (!item) return c.json({ error: "Not Found", message: "File not found" }, 404);
+
+  const [revision] = await db.select().from(fileRevisions)
+    .where(and(eq(fileRevisions.id, revisionId), eq(fileRevisions.itemId, itemId)))
+    .limit(1);
+  if (!revision) return c.json({ error: "Not Found", message: "Revision not found" }, 404);
+  if (!isTextItem(item.name, item.mimeType, revision.size)) {
+    return c.json({ error: "Unsupported", message: "File bukan teks — diff hanya untuk file teks" }, 415);
+  }
+  const buffer = await fetchRemoteBuffer(userId, revision.storageRemoteId ?? item.storageRemoteId);
+  if (!buffer) return c.json({ error: "Not Found", message: "Konten revisi tidak tersedia" }, 404);
+  return c.json({ content: buffer.toString("utf-8") });
+});
 
 // 1. Search with FTS & OCR extracted text filter
 advancedRouter.get("/search", authMiddleware, async (c) => {
@@ -26,6 +128,131 @@ advancedRouter.get("/search", authMiddleware, async (c) => {
     .limit(50);
 
   return c.json({ items });
+});
+
+// AI Assistant — natural language search
+advancedRouter.post("/assistant", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const { query } = await c.req.json() as { query: string };
+  if (!query || !query.trim()) {
+    return c.json({ answer: "Silakan tulis pertanyaan tentang file Anda.", items: [] });
+  }
+
+  // Natural language parsing
+  const explainParts: string[] = [];
+  const conditions: ReturnType<typeof sql>[] = [
+    sql`${driveItems.userId} = ${userId}`,
+    sql`${driveItems.deletedAt} IS NULL`,
+  ];
+  const lower = query.toLowerCase().trim();
+
+  // Type extensions mapping
+  const TYPE_EXT_MAP: Record<string, string[]> = {
+    foto: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
+    photo: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
+    gambar: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
+    image: ["jpg", "jpeg", "png", "gif", "webp", "svg"],
+    video: ["mp4", "mkv", "avi", "mov", "webm", "flv"],
+    music: ["mp3", "wav", "flac", "ogg", "m4a", "aac"],
+    audio: ["mp3", "wav", "flac", "ogg", "m4a", "aac"],
+    document: ["pdf", "doc", "docx", "txt", "md", "xls", "xlsx", "ppt", "pptx", "json", "csv"],
+    pdf: ["pdf"],
+    archive: ["zip", "rar", "7z", "tar", "gz", "bz2"],
+    apk: ["apk"],
+  };
+
+  // Build conditions without modifying a shared string — parse from original query each time
+  let hasDateFilter = false;
+  let freeText = lower;
+
+  // 1. Tag filter (before other transforms)
+  const tagPattern = /(?:^|\s)(?:tag\s*[:#]?|#)([a-z0-9_-]+)/i;
+  const tagMatch = lower.match(tagPattern);
+  if (tagMatch) {
+    const tag = tagMatch[1].toLowerCase();
+    conditions.push(sql`${driveItems.tags} ILIKE ${`%${tag}%`}`);
+    explainParts.push(`tag #${tag}`);
+  }
+
+  // 2. Type filter
+  for (const [typeName, exts] of Object.entries(TYPE_EXT_MAP)) {
+    if (lower.includes(typeName)) {
+      conditions.push(sql`LOWER(${driveItems.name}) ~ ${`(${exts.map((e) => `.${e}`).join("|")})$`}`);
+      explainParts.push(`tipe ${typeName}`);
+      break;
+    }
+  }
+
+  // 3. Size filter
+  const sizeMatch = lower.match(/([<>])\s*(\d+)\s*(mb|gb|kb)/i);
+  if (sizeMatch) {
+    const op = sizeMatch[1];
+    const val = parseInt(sizeMatch[2], 10);
+    const unit = sizeMatch[3].toLowerCase();
+    const bytes = unit === "gb" ? val * 1024 * 1024 * 1024 : unit === "mb" ? val * 1024 * 1024 : val * 1024;
+    conditions.push(sql`${driveItems.size} ${sql.raw(op)} ${bytes}`);
+    explainParts.push(`ukuran ${op} ${val} ${unit}`);
+  }
+  if (lower.includes("besar")) {
+    conditions.push(sql`${driveItems.size} > ${100 * 1024 * 1024}`);
+    if (!sizeMatch) explainParts.push("ukuran > 100 MB");
+  }
+  if (lower.includes("kecil")) {
+    conditions.push(sql`${driveItems.size} < ${1024 * 1024}`);
+    if (!sizeMatch) explainParts.push("ukuran < 1 MB");
+  }
+
+  // 4. Time filter
+  const now = new Date();
+  if (lower.includes("hari ini") || lower.includes("today")) {
+    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getFullYear(), now.getMonth(), now.getDate())}`);
+    explainParts.push("hari ini"); hasDateFilter = true;
+  }
+  if (lower.includes("minggu lalu") || lower.includes("last week")) {
+    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getTime() - 7 * 86400000)}`);
+    explainParts.push("minggu lalu"); hasDateFilter = true;
+  }
+  if (lower.includes("bulan lalu") || lower.includes("last month")) {
+    conditions.push(sql`${driveItems.createdAt} >= ${new Date(now.getTime() - 30 * 86400000)}`);
+    explainParts.push("bulan lalu"); hasDateFilter = true;
+  }
+  const isNewest = lower.includes("baru") || lower.includes("terbaru");
+  if (isNewest) explainParts.push("terbaru");
+
+  // 5. Free text: use entire query minus special patterns, sanitize
+  let searchText = lower
+    .replace(tagPattern, "")
+    .replace(/[<>]\s*\d+\s*(mb|gb|kb)/gi, "")
+    .replace(/besar|kecil|hari ini|today|minggu lalu|last week|bulan lalu|last month|baru|terbaru|foto|photo|gambar|image|video|music|audio|document|pdf|archive|apk/gi, "")
+    .replace(/[^a-z0-9\s.-]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (searchText) {
+    conditions.push(sql`(LOWER(${driveItems.name}) LIKE ${`%${searchText}%`} OR LOWER(${driveItems.extractedText}) LIKE ${`%${searchText}%`})`);
+    explainParts.push(`"${searchText}"`);
+  }
+
+  const items = await db.select().from(driveItems)
+    .where(and(...conditions))
+    .orderBy(desc(driveItems.createdAt))
+    .limit(20);
+
+  const rows = items as any[];
+  const totalSize = rows.reduce((s: number, r: any) => s + (r.size || 0), 0);
+
+  let answer = `🔍 Ditemukan **${rows.length} file** ${explainParts.length > 0 ? `(${explainParts.join(", ")})` : ""}.`;
+  if (rows.length > 0) {
+    const top = rows.slice(0, 5).map((r: any, i: number) => {
+      const icon = r.kind === "folder" ? "📂" : "📄";
+      const sizeStr = r.size ? `(${(r.size / 1024 / 1024).toFixed(1)} MB)` : "";
+      return `${i + 1}. ${icon} **${r.name}** ${sizeStr}`;
+    }).join("\n");
+    answer += `\n\n${top}`;
+    if (rows.length > 5) answer += `\n…dan ${rows.length - 5} lainnya.`;
+    answer += `\n\n💾 Total: ${(totalSize / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+
+  return c.json({ answer, items: rows });
 });
 
 // 2. Storage Cleaner & Duplicate Finder (Hash & Name matching)

@@ -36,6 +36,76 @@ folders.get("/:id/path", authMiddleware, async (c) => {
   return c.json({ data: chain });
 });
 
+// Treemap: hierarki folder + file dengan ukuran rekursif (untuk visualisasi storage)
+folders.get("/treemap", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const items = await db.select().from(driveItems)
+    .where(and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt)));
+
+  interface Node {
+    id: string;
+    name: string;
+    kind: "file" | "folder";
+    size: number;
+    fileCount: number;
+    mimeType: string | null;
+    children: Node[];
+  }
+
+  const byId = new Map<string, Node>();
+  const roots: Node[] = [];
+  for (const item of items) {
+    const node: Node = {
+      id: item.id,
+      name: item.name,
+      kind: item.kind as "file" | "folder",
+      size: item.kind === "file" ? item.size : 0,
+      fileCount: item.kind === "file" ? 1 : 0,
+      mimeType: item.mimeType ?? null,
+      children: [],
+    };
+    byId.set(item.id, node);
+    if (item.parentId && byId.has(item.parentId)) {
+      byId.get(item.parentId)!.children.push(node);
+    } else if (item.parentId) {
+      // parent mungkin belum diproses — simpan sementara
+      (node as any)._pendingParent = item.parentId;
+      roots.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  // Selesaikan penempatan parent yang tertunda + agregasi ukuran rekursif
+  const attach = (node: Node, depth = 0): void => {
+    const pending = (node as any)._pendingParent as string | undefined;
+    if (pending && byId.has(pending)) {
+      const parent = byId.get(pending)!;
+      parent.children.push(node);
+      const idx = roots.indexOf(node);
+      if (idx >= 0) roots.splice(idx, 1);
+    }
+    delete (node as any)._pendingParent;
+    let size = node.size;
+    let count = node.fileCount;
+    for (const child of node.children) {
+      attach(child, depth + 1);
+      size += child.size;
+      count += child.fileCount;
+    }
+    node.size = size;
+    node.fileCount = count;
+  };
+  for (const root of roots) attach(root);
+
+  const sortBySize = (nodes: Node[]): Node[] => {
+    for (const n of nodes) sortBySize(n.children);
+    return nodes.sort((a, b) => b.size - a.size);
+  };
+  sortBySize(roots);
+  return c.json({ data: { totalSize: roots.reduce((s, n) => s + n.size, 0), roots } });
+});
+
 // Get storage usage stats
 folders.get("/stats/usage", authMiddleware, async (c) => {
   const userId = c.get("userId");
@@ -99,7 +169,7 @@ function sanitizeZipPath(parts: string[]): string | null {
 }
 
 // Build ZIP in memory (stored entries) from [{ name, buffer, mtime }]
-function buildZip(entries: { name: string; buffer: Buffer; mtime: Date }[]): Buffer {
+export function buildZip(entries: { name: string; buffer: Buffer; mtime: Date }[]): Buffer {
   const chunks: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
@@ -193,7 +263,7 @@ async function resolveUserCreds(userId: string) {
 }
 
 // Ambil buffer file dari local staging atau Telegram
-async function fetchFileBuffer(userId: string, item: typeof driveItems.$inferSelect) {
+export async function fetchFileBuffer(userId: string, item: typeof driveItems.$inferSelect) {
   const remoteId = item.storageRemoteId ?? "";
   if (remoteId.startsWith("local://")) {
     const p = resolveLocalPath(remoteId);

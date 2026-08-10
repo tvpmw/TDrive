@@ -15,7 +15,11 @@ interface PublicShareData {
   createdAt: string;
   requiresPassword: boolean;
   isExpired: boolean;
+  isExhausted?: boolean;
   downloadCount: number;
+  maxDownloads?: number | null;
+  remainingDownloads?: number | null;
+  isSelfDestruct?: boolean;
 }
 
 export default function PublicSharePage({ params }: { params: Promise<{ token: string }> }) {
@@ -125,6 +129,8 @@ export default function PublicSharePage({ params }: { params: Promise<{ token: s
           <CardTitle className="text-base truncate px-2 font-semibold">{data.name}</CardTitle>
           <CardDescription className="text-xs">
             {formatBytes(data.size)} • Diunduh {data.downloadCount}x
+            {data.maxDownloads != null && ` • Sisa ${data.remainingDownloads ?? 0} unduhan`}
+            {data.isSelfDestruct && " • 🔥 Self-destruct"}
           </CardDescription>
         </CardHeader>
 
@@ -152,15 +158,22 @@ export default function PublicSharePage({ params }: { params: Promise<{ token: s
         </CardContent>
 
         <CardFooter className="pt-2">
-          <Button
-            className="w-full"
-            size="lg"
-            onClick={handleDownload}
-            disabled={downloading || (data.requiresPassword && !password)}
-          >
-            <Download className="h-4 w-4 mr-2" />
-            {downloading ? "Mengunduh..." : "Unduh File"}
-          </Button>
+          {data.isExhausted ? (
+            <div className="w-full p-3 text-xs bg-amber-500/10 text-amber-400 rounded-lg border border-amber-500/30 text-center flex items-center justify-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              Link ini sudah mencapai batas unduhan ({data.maxDownloads}x)
+            </div>
+          ) : (
+            <Button
+              className="w-full"
+              size="lg"
+              onClick={handleDownload}
+              disabled={downloading || (data.requiresPassword && !password)}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              {downloading ? "Mengunduh..." : "Unduh File"}
+            </Button>
+          )}
         </CardFooter>
       </Card>
     </div>

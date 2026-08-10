@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Share2, Copy, Check, Lock, Calendar, Trash2, Link, QrCode as QrCodeIcon } from "lucide-react";
+import { Share2, Copy, Check, Lock, Calendar, Trash2, Link, QrCode as QrCodeIcon, Download, Flame } from "lucide-react";
 import type { DriveItem } from "@tdrive/shared";
 
 interface ShareDialogProps {
@@ -20,6 +20,8 @@ interface ShareDialogProps {
 export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialogProps) {
   const [password, setPassword] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<number | null>(null);
+  const [maxDownloads, setMaxDownloads] = useState<number | null>(null);
+  const [selfDestruct, setSelfDestruct] = useState(false);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [shareToken, setShareToken] = useState<string | null>(item?.shareToken ?? null);
@@ -50,6 +52,8 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
       setHasPassword(!!item.hasSharePassword);
       setPassword("");
       setExpiresInDays(null);
+      setMaxDownloads(null);
+      setSelfDestruct(false);
     }
   }, [item]);
 
@@ -65,6 +69,8 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
       const res = await apiClient.post<{ data: DriveItem }>(`/share/${item.id}`, {
         password: password || null,
         expires_in_days: expiresInDays,
+        max_downloads: maxDownloads,
+        is_self_destruct: selfDestruct ? 1 : 0,
       });
       setShareToken(res.data.data.shareToken ?? null);
       setHasPassword(!!res.data.data.hasSharePassword);
@@ -127,9 +133,19 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
                 </p>
               </div>
 
-              <div className="flex items-center justify-between pt-2 border-t text-xs text-muted-foreground">
-                <span>{hasPassword ? "🔒 Diberi Password" : "🌐 Tanpa Password"}</span>
-                <Button variant="ghost" size="sm" onClick={handleRevoke} className="text-destructive h-8 px-2 text-xs">
+              <div className="flex items-center gap-2 flex-wrap pt-2 border-t text-xs text-muted-foreground">
+                <span className="flex items-center gap-1">{hasPassword ? "🔒 Berpassword" : "🌐 Publik"}</span>
+                {item?.maxDownloads != null && (
+                  <span className="flex items-center gap-1">
+                    <Download className="h-3 w-3" /> {item.downloadCount ?? 0}/{item.maxDownloads} unduhan
+                  </span>
+                )}
+                {item?.isSelfDestruct === 1 && (
+                  <span className="flex items-center gap-1 text-red-400">
+                    <Flame className="h-3 w-3" /> Self-destruct
+                  </span>
+                )}
+                <Button variant="ghost" size="sm" onClick={handleRevoke} className="text-destructive h-8 px-2 text-xs ml-auto">
                   <Trash2 className="h-3.5 w-3.5 mr-1" /> Hapus Link
                 </Button>
               </div>
@@ -173,6 +189,47 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
                     </Button>
                   ))}
                 </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs flex items-center gap-1.5">
+                  <Download className="h-3.5 w-3.5 text-muted-foreground" /> Batas Jumlah Unduhan
+                </Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { label: "Tanpa Batas", val: null },
+                    { label: "5x", val: 5 },
+                    { label: "10x", val: 10 },
+                    { label: "25x", val: 25 },
+                    { label: "100x", val: 100 },
+                  ].map((opt) => (
+                    <Button
+                      key={opt.label}
+                      type="button"
+                      variant={maxDownloads === opt.val ? "default" : "outline"}
+                      size="sm"
+                      className="text-xs h-8"
+                      onClick={() => setMaxDownloads(opt.val)}
+                    >
+                      {opt.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelfDestruct(!selfDestruct)}
+                  className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg border transition-all ${
+                    selfDestruct
+                      ? "bg-red-500/15 border-red-500/40 text-red-400"
+                      : "border-border/60 text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <Flame className="h-4 w-4" />
+                  <span>Self-Destruct setelah unduhan terakhir</span>
+                </button>
               </div>
 
               <Button className="w-full" onClick={handleGenerate} disabled={loading}>

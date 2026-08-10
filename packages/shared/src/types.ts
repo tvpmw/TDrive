@@ -41,6 +41,7 @@ export interface DriveItem {
   encryptionIv?: string | null;
   keySalt?: string | null;
   maxDownloads?: number | null;
+  isSelfDestruct?: number;
   fileHash?: string | null;
   extractedText?: string | null;
   isStarred?: number;

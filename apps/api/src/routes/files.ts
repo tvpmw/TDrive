@@ -20,6 +20,7 @@ import { fileRevisions } from "../db/schema/advanced-features.js";
 import { nanoid } from "nanoid";
 import type { TelegramCredentials } from "../services/telegram/client.js";
 import { EDITABLE_EXTENSIONS } from "@tdrive/shared";
+import { buildZip, fetchFileBuffer } from "./folders.js";
 
 const files = new Hono<{ Variables: Variables }>();
 
@@ -52,6 +53,30 @@ function parseTelegramRemoteId(remoteId: string): { channelId: number; messageId
 }
 
 // List files (supports search and recursive global queries across subfolders)
+// Ringkasan semua tag & koleksi milik user (untuk filter chip di drive)
+files.get("/tags/summary", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const rows = await db.select({ tags: driveItems.tags, collections: driveItems.collections })
+    .from(driveItems)
+    .where(and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt)));
+
+  const tagMap = new Map<string, number>();
+  const collMap = new Map<string, number>();
+  for (const row of rows) {
+    for (const t of (row.tags ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
+    }
+    for (const c of (row.collections ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      collMap.set(c, (collMap.get(c) ?? 0) + 1);
+    }
+  }
+  const tags = Array.from(tagMap.entries()).map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+  const collections = Array.from(collMap.entries()).map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+  return c.json({ data: { tags, collections } });
+});
+
 files.get("/", authMiddleware, async (c) => {
   const userId = c.get("userId");
   const parentId = c.req.query("parent_id");
@@ -312,6 +337,94 @@ files.post("/upload", authMiddleware, async (c) => {
   return c.json({ data: createdItem }, 201);
 });
 
+// Bulk: download beberapa file sekaligus sebagai ZIP
+files.post("/bulk/zip", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const body = z.parse(
+    z.object({ ids: z.array(z.string()).min(1).max(200) }),
+    await c.req.json()
+  );
+  const rows = await db.select().from(driveItems).where(
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+  );
+  const selected = rows.filter((r) => body.ids.includes(r.id) && r.kind === "file");
+  if (selected.length === 0) return c.json({ error: "Bad Request", message: "Tidak ada file yang dipilih" }, 400);
+
+  const entries: { name: string; buffer: Buffer; mtime: Date }[] = [];
+  let total = 0;
+  for (const item of selected) {
+    const buf = await fetchFileBuffer(userId, item).catch(() => null);
+    if (!buf) continue;
+    total += buf.length;
+    if (total > 400 * 1024 * 1024) break; // guard 400MB
+    entries.push({ name: item.name, buffer: buf, mtime: new Date(item.updatedAt) });
+  }
+  if (entries.length === 0) return c.json({ error: "Not Found", message: "File tidak tersedia" }, 404);
+
+  const zip = buildZip(entries);
+  emitActivity({
+    type: "file.uploaded",
+    message: `${entries.length} file diunduh sebagai ZIP`,
+    userId,
+  });
+  return new Response(new Uint8Array(zip), {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="tdrive-bulk-${Date.now()}.zip"`,
+      "Content-Length": String(zip.length),
+    },
+  });
+});
+
+// Bulk: duplikasi banyak item sekaligus
+files.post("/bulk/duplicate", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const body = z.parse(
+    z.object({ ids: z.array(z.string()).min(1).max(200) }),
+    await c.req.json()
+  );
+  const rows = await db.select().from(driveItems).where(
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+  );
+  const selected = rows.filter((r) => body.ids.includes(r.id));
+  let created = 0;
+  for (const item of selected) {
+    await db.insert(driveItems).values({
+      ...item,
+      id: newId(),
+      name: `${item.name} (Copy)`,
+      shareToken: null,
+      sharePasswordHash: null,
+      shareExpiresAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    created++;
+  }
+  return c.json({ data: { duplicated: created } });
+});
+
+// Bulk: set tags & collections untuk banyak item
+files.post("/bulk/tags", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const body = z.parse(
+    z.object({ ids: z.array(z.string()).min(1).max(200), tags: z.string().nullable().optional(), collections: z.string().nullable().optional() }),
+    await c.req.json()
+  );
+  const updates: Record<string, any> = { updatedAt: new Date() };
+  if (body.tags !== undefined) updates.tags = body.tags;
+  if (body.collections !== undefined) updates.collections = body.collections;
+  const rows = await db.select({ id: driveItems.id }).from(driveItems).where(
+    and(eq(driveItems.userId, userId), isNull(driveItems.deletedAt))
+  );
+  const ids = rows.map((r) => r.id).filter((id) => body.ids.includes(id));
+  if (ids.length === 0) return c.json({ error: "Bad Request", message: "Tidak ada item yang dipilih" }, 400);
+  for (const id of ids) {
+    await db.update(driveItems).set(updates).where(eq(driveItems.id, id));
+  }
+  return c.json({ data: { updated: ids.length } });
+});
+
 // Toggle Starred (Favorites)
 files.post("/:id/star", authMiddleware, async (c) => {
   const userId = c.get("userId");
@@ -550,6 +663,9 @@ files.patch("/:id", authMiddleware, async (c) => {
     z.object({
       name: z.string().min(1).optional(),
       parent_id: z.string().nullable().optional(),
+      tags: z.string().nullable().optional(),
+      collections: z.string().nullable().optional(),
+      is_starred: z.number().min(0).max(1).optional(),
     }),
     await c.req.json()
   );
@@ -557,6 +673,9 @@ files.patch("/:id", authMiddleware, async (c) => {
   const updates: Record<string, any> = { updatedAt: new Date() };
   if (body.name !== undefined) updates.name = body.name;
   if (body.parent_id !== undefined) updates.parentId = body.parent_id;
+  if (body.tags !== undefined) updates.tags = body.tags;
+  if (body.collections !== undefined) updates.collections = body.collections;
+  if (body.is_starred !== undefined) updates.isStarred = body.is_starred;
 
   const [item] = await db.select().from(driveItems)
     .where(and(eq(driveItems.id, id), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))

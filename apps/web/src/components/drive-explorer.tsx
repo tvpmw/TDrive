@@ -8,7 +8,7 @@ import {
   File, Folder, Upload, Trash2, Search, FolderPlus, Cloud, CloudOff,
   Download, Edit3, HardDrive, LayoutGrid, List, MoreHorizontal,
   Image, Film, Music, Archive, Code, FileText, RefreshCw, ArrowUpRight,
-  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images, History,
+  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images, History, Tag, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,12 +17,14 @@ import { TextEditorDialog } from "@/components/text-editor-dialog";
 import { MediaPreviewDialog } from "@/components/media-preview-dialog";
 import { ShareDialog } from "@/components/share-dialog";
 import { StorageAnalytics } from "@/components/storage-analytics";
+import { StorageTreemap } from "@/components/storage-treemap";
 import { StatsGrid } from "@/components/stats-grid";
 import { useUploadManager } from "@/components/upload-manager";
 import { SmartFolders } from "@/components/smart-folders";
 import { CommandPaletteTrigger } from "@/components/command-palette";
 import { BatchRenameModal } from "@/components/batch-rename-modal";
 import { RevisionsDialog } from "@/components/revisions-dialog";
+import { TagEditorDialog } from "@/components/tag-editor-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -106,12 +108,15 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const [previewMediaItem, setPreviewMediaItem] = useState<DriveItem | null>(null);
   const [shareItem, setShareItem] = useState<DriveItem | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showTreemap, setShowTreemap] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"list" | "grid" | "shelf">("list");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [showBatchRename, setShowBatchRename] = useState(false);
   const [revisionsItem, setRevisionsItem] = useState<{ id: string; name: string } | null>(null);
+  const [tagEditorItem, setTagEditorItem] = useState<DriveItem | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -170,6 +175,12 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
     queryFn: () =>
       apiClient.get(`/folders/${parentId}/path`).then((r) => r.data.data as { id: string; name: string }[]),
     enabled: !!parentId,
+  });
+
+  // Ringkasan tag & koleksi untuk filter chips
+  const { data: tagSummary } = useQuery({
+    queryKey: ["tags", "summary"],
+    queryFn: () => apiClient.get("/files/tags/summary").then((r) => r.data.data as { tags: { name: string; count: number }[]; collections: { name: string; count: number }[] }),
   });
 
   const { data: usage } = useQuery({
@@ -306,6 +317,35 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
     },
   });
 
+  const bulkDuplicateMutation = useMutation({
+    mutationFn: async () => {
+      await apiClient.post("/files/bulk/duplicate", { ids: Array.from(selectedIds) });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
+      queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.storageUsage() });
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+    },
+  });
+
+  // ZIP massal: unduh semua file terpilih sebagai satu arsip
+  const bulkZip = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      const res = await apiClient.post("/files/bulk/zip", { ids: Array.from(selectedIds) }, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tdrive-bulk-${Date.now()}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err?.response?.data?.message || err?.message || "Gagal membuat ZIP");
+    }
+  };
+
   const bulkMoveMutation = useMutation({
     mutationFn: async (targetId: string | null) => {
       await Promise.all(Array.from(selectedIds).map((id) =>
@@ -356,6 +396,13 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
 
       if (targetSearch && !item.name.toLowerCase().includes(targetSearch)) {
         matchesSearch = false;
+      }
+
+      // Filter tag/kollection pintar
+      if (tagFilter) {
+        const itemTags = (item.tags ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        const itemColls = (item.collections ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (!itemTags.includes(tagFilter) && !itemColls.includes(tagFilter)) return false;
       }
 
       if (categoryFilter === "all") return true;
@@ -720,6 +767,13 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                 onClick={() => setShowBatchRename(true)}>
                 <Edit3 className="h-3.5 w-3.5 mr-1" /> Rename
               </Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => bulkZip()}>
+                <Archive className="h-3.5 w-3.5 mr-1 text-yellow-500" /> ZIP
+              </Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs"
+                onClick={() => { if (confirm(`Duplikasi ${selectedIds.size} item?`)) bulkDuplicateMutation.mutate(); }}>
+                <Copy className="h-3.5 w-3.5 mr-1" /> Duplikasi
+              </Button>
               <Button variant="destructive" size="sm" className="h-7 text-xs"
                 onClick={() => { if (confirm(`Hapus ${selectedIds.size} item ke Trash?`)) batchDeleteMutation.mutate(); }}>
                 <Trash2 className="h-3.5 w-3.5 mr-1" /> Hapus
@@ -741,6 +795,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
             </div>
             <Button variant={showAnalytics ? "secondary" : "outline"} size="sm" className="h-8 w-8 p-0 shrink-0 md:w-auto md:px-3 md:text-xs" onClick={() => setShowAnalytics(!showAnalytics)} aria-label="Analytics">
               <BarChart2 className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden md:inline">Analytics</span>
+            </Button>
+            <Button variant={showTreemap ? "secondary" : "outline"} size="sm" className="h-8 w-8 p-0 shrink-0 md:w-auto md:px-3 md:text-xs" onClick={() => setShowTreemap(!showTreemap)} aria-label="Treemap">
+              <HardDrive className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden md:inline">Treemap</span>
             </Button>
           </div>
           <div className="flex items-center gap-0.5 sm:gap-1 flex-wrap justify-end">
@@ -810,11 +867,41 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
               <span>{cat.label}</span>
             </Badge>
           ))}
+          {tagFilter && (
+            <Badge
+              variant="default"
+              className="cursor-pointer px-2.5 py-1 text-[11px] font-medium gap-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-500"
+              onClick={() => setTagFilter(null)}
+              title="Hapus filter tag"
+            >
+              <Tag className="h-3 w-3" /> #{tagFilter} ✕
+            </Badge>
+          )}
+          {(tagSummary?.tags ?? []).filter((t) => t.name !== tagFilter).slice(0, 8).map((t) => (
+            <Badge
+              key={t.name}
+              variant="outline"
+              className={cn(
+                "cursor-pointer px-2.5 py-1 text-[11px] font-medium transition-all gap-1.5 rounded-md",
+                "bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border-indigo-500/30"
+              )}
+              onClick={() => { setTagFilter(t.name); setCategoryFilter("all"); }}
+            >
+              <Tag className="h-3 w-3" />
+              <span>#{t.name}</span>
+              <span className="text-[9px] opacity-60">{t.count}</span>
+            </Badge>
+          ))}
         </div>
 
         {showAnalytics && (
           <div className="p-3 border-b border-border bg-muted/10">
             <StorageAnalytics />
+          </div>
+        )}
+        {showTreemap && (
+          <div className="p-3 border-b border-border bg-muted/10">
+            <StorageTreemap />
           </div>
         )}
 
@@ -947,6 +1034,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                                 <DropdownMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>
                                   <History className="h-4 w-4 mr-2 text-purple-400" /> Riwayat Versi
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setTagEditorItem(item)}>
+                                  <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
+                                </DropdownMenuItem>
                                 {item.syncStatus !== "synced" && (
                                   <DropdownMenuItem onClick={() => syncMutation.mutate(item.id)}>
                                     <Cloud className="h-4 w-4 mr-2" /> Sync to Telegram
@@ -977,6 +1067,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                         <ContextMenuItem onClick={() => setEditingFile({ id: item.id, name: item.name })}>Edit Text</ContextMenuItem>
                         <ContextMenuItem onClick={() => setShareItem(item)}>Bagikan Link</ContextMenuItem>
                         <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
+                        <ContextMenuItem onClick={() => setTagEditorItem(item)}>
+                          <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
+                        </ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
                       </>
@@ -1046,6 +1139,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                         <ContextMenuItem onClick={() => setEditingFile({ id: item.id, name: item.name })}>Edit Text</ContextMenuItem>
                         <ContextMenuItem onClick={() => setShareItem(item)}>Bagikan Link</ContextMenuItem>
                         <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
+                        <ContextMenuItem onClick={() => setTagEditorItem(item)}>
+                          <Tag className="h-4 w-4 mr-2 text-indigo-400" /> Kelola Tag
+                        </ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
                       </>
@@ -1150,6 +1246,16 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           onOpenChange={(open) => !open && setRevisionsItem(null)}
           onRestored={() => {
             queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
+            queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
+          }}
+        />
+        <TagEditorDialog
+          item={tagEditorItem}
+          open={!!tagEditorItem}
+          onOpenChange={(open) => !open && setTagEditorItem(null)}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
+            queryClient.invalidateQueries({ queryKey: ["tags", "summary"] });
             queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
           }}
         />

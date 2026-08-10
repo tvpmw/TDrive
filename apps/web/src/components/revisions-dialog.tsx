@@ -6,7 +6,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/lib/api-client";
-import { History, RotateCcw, FileText, Loader2, CheckCircle2 } from "lucide-react";
+import { History, RotateCcw, FileText, Loader2, CheckCircle2, GitCompareArrows, ChevronDown, ChevronUp } from "lucide-react";
+import { DiffView, DiffLoading, DiffError } from "@/components/diff-view";
 
 interface Revision {
   id: string;
@@ -29,6 +30,15 @@ interface RevisionsDialogProps {
 export function RevisionsDialog({ itemId, itemName, open, onOpenChange, onRestored }: RevisionsDialogProps) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [diffState, setDiffState] = useState<{
+    revisionId: string;
+    revisionLabel: string;
+    oldText: string;
+    newText: string;
+    status: "loading" | "ok" | "error";
+    message?: string;
+  } | null>(null);
+  const [openDiffId, setOpenDiffId] = useState<string | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["revisions", itemId],
@@ -40,8 +50,45 @@ export function RevisionsDialog({ itemId, itemName, open, onOpenChange, onRestor
   });
 
   useEffect(() => {
-    if (!open) setNotice(null);
+    if (!open) {
+      setNotice(null);
+      setDiffState(null);
+      setOpenDiffId(null);
+    }
   }, [open]);
+
+  // Muat konten revisi vs konten sekarang, lalu hitung diff
+  const loadDiff = useCallback(async (rev: Revision) => {
+    setOpenDiffId(rev.id);
+    setDiffState({ revisionId: rev.id, revisionLabel: `Versi ${rev.revisionNumber}`, oldText: "", newText: "", status: "loading" });
+    try {
+      const [revRes, curRes] = await Promise.all([
+        apiClient.get(`/api/advanced/files/${itemId}/revisions/${rev.id}/content`),
+        apiClient.get(`/api/advanced/files/${itemId}/content`),
+      ]);
+      setDiffState({
+        revisionId: rev.id,
+        revisionLabel: `Versi ${rev.revisionNumber}`,
+        oldText: revRes.data?.content ?? "",
+        newText: curRes.data?.content ?? "",
+        status: "ok",
+      });
+    } catch (err: any) {
+      setDiffState({
+        revisionId: rev.id,
+        revisionLabel: `Versi ${rev.revisionNumber}`,
+        oldText: "",
+        newText: "",
+        status: "error",
+        message: err?.response?.data?.message || err?.message || "Gagal memuat diff",
+      });
+    }
+  }, [itemId]);
+
+  const closeDiff = useCallback(() => {
+    setOpenDiffId(null);
+    setDiffState(null);
+  }, []);
 
   const restoreMutation = useMutation({
     mutationFn: async (revisionId: string) => {
@@ -115,38 +162,64 @@ export function RevisionsDialog({ itemId, itemName, open, onOpenChange, onRestor
             </div>
           )}
           {revisions.map((rev, idx) => (
-            <div
-              key={rev.id}
-              className="flex items-center justify-between gap-3 px-3.5 py-3 rounded-xl border border-border/50 bg-card/40 hover:bg-card/70 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-400 shrink-0">
-                  <FileText className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">Versi {rev.revisionNumber}</span>
-                    {idx === 0 && <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/40 text-amber-400">Sebelumnya</Badge>}
-                    {idx === revisions.length - 1 && <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-slate-600 text-slate-400">Versi Awal</Badge>}
+            <div key={rev.id} className="rounded-xl border border-border/50 bg-card/40 hover:bg-card/70 transition-colors overflow-hidden">
+              <div className="flex items-center justify-between gap-3 px-3.5 py-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-400 shrink-0">
+                    <FileText className="h-4 w-4" />
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                    {formatDate(rev.createdAt)} · {formatBytes(rev.size)}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5 font-mono">
-                    {rev.storageRemoteId?.startsWith("telegram://") ? "☁️ Telegram" : rev.storageRemoteId?.startsWith("local://") ? "💾 Lokal" : rev.storageProvider || "—"}
-                  </p>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">Versi {rev.revisionNumber}</span>
+                      {idx === 0 && <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/40 text-amber-400">Sebelumnya</Badge>}
+                      {idx === revisions.length - 1 && <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-slate-600 text-slate-400">Versi Awal</Badge>}
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      {formatDate(rev.createdAt)} · {formatBytes(rev.size)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5 font-mono">
+                      {rev.storageRemoteId?.startsWith("telegram://") ? "☁️ Telegram" : rev.storageRemoteId?.startsWith("local://") ? "💾 Lokal" : rev.storageProvider || "—"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => (openDiffId === rev.id ? closeDiff() : loadDiff(rev))}
+                    className="h-8 text-xs gap-1.5 border-sky-500/40 text-sky-300 hover:bg-sky-500/10"
+                    title="Bandingkan dengan versi sekarang"
+                  >
+                    <GitCompareArrows className="h-3.5 w-3.5" />
+                    Diff
+                    {openDiffId === rev.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={restoreMutation.isPending}
+                    onClick={() => restoreMutation.mutate(rev.id)}
+                    className="h-8 text-xs gap-1.5 border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
+                  >
+                    {restoreMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                    Restore
+                  </Button>
                 </div>
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={restoreMutation.isPending}
-                onClick={() => restoreMutation.mutate(rev.id)}
-                className="shrink-0 h-8 text-xs gap-1.5 border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
-              >
-                {restoreMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                Restore
-              </Button>
+              {openDiffId === rev.id && diffState && diffState.revisionId === rev.id && (
+                <div className="px-3 pb-3">
+                  {diffState.status === "loading" && <DiffLoading />}
+                  {diffState.status === "error" && <DiffError message={diffState.message ?? "Gagal memuat diff"} />}
+                  {diffState.status === "ok" && (
+                    <DiffView
+                      oldText={diffState.oldText}
+                      newText={diffState.newText}
+                      oldLabel={diffState.revisionLabel}
+                      newLabel="Versi Sekarang"
+                    />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

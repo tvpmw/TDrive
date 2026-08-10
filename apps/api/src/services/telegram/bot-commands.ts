@@ -14,9 +14,9 @@ import { getClient, findChannel, getForumTopics } from "./client.js";
 import { decryptGlobal } from "../../lib/crypto.js";
 import { getEnv } from "../../env.js";
 import { InputFile } from "grammy";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, basename } from "node:path";
 import { nanoid } from "nanoid";
 
 function formatSize(bytes: number): string {
@@ -34,6 +34,15 @@ function formatDate(date: Date | string): string {
   return new Date(date).toLocaleDateString("en-US", {
     year: "numeric", month: "short", day: "numeric",
   });
+}
+
+function formatDuration(ms: number): string {
+  const parts: string[] = [];
+  const d = Math.floor(ms / 86400000); if (d > 0) { parts.push(d + "h"); ms -= d * 86400000; }
+  const h = Math.floor(ms / 3600000); if (h > 0) { parts.push(h + "j"); ms -= h * 3600000; }
+  const m = Math.floor(ms / 60000); if (m > 0) { parts.push(m + "m"); ms -= m * 60000; }
+  const s = Math.floor(ms / 1000); if (s > 0) parts.push(s + "d");
+  return parts.join(" ") || "sebentar";
 }
 
 function getFileIcon(name: string): string {
@@ -162,6 +171,8 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       `/dupes — Deteksi file duplikat\n` +
       `/topics — List forum topics in supergroup\n` +
       `/upload — Send a file to store in TDrive\n` +
+      `/dl <url> — Download file from URL langsung ke drive\n` +
+      `/remind <durasi> <pesan> — Pengingat (contoh: /remind 30m Backup file)\n` +
       `/cancel — Cancel current operation`,
       { parse_mode: "Markdown" }
     );
@@ -996,6 +1007,107 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       `🔁 *File Duplikat Ditemukan: ${dupes.length} grup*\n\n${blocks.join("\n")}\n\n💾 Potensi hemat: *${formatSize(totalSaved)}*\nGunakan fitur Duplicates di web untuk membersihkan.`,
       { parse_mode: "Markdown" }
     );
+  });
+
+  // /dl <url> — Download file dari URL langsung ke lokal storage
+  bot.command("dl", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+    const url = ctx.match?.trim();
+    if (!url || !url.startsWith("http")) {
+      return ctx.reply("❌ Gunakan: /dl <url>\nContoh: /dl https://example.com/file.pdf");
+    }
+    const statusMsg = await ctx.reply(`⬇️ Mendownload *${url}*...`, { parse_mode: "Markdown" });
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const { createHash } = await import("node:crypto");
+      const fileHash = createHash("sha256").update(buf).digest("hex");
+
+      // Simpan ke lokal temp
+      const TEMP_DIR = resolve("./storage-temp");
+      await mkdir(TEMP_DIR, { recursive: true });
+      const localName = `dl-${nanoid(12)}-${basename(decodeURIComponent(new URL(url).pathname)) || "download.bin"}`;
+      const localPath = join(TEMP_DIR, localName);
+      await writeFile(localPath, buf);
+
+      // Ambil nama file dari URL
+      const fileName = basename(decodeURIComponent(new URL(url).pathname)) || `download-${Date.now()}`;
+
+      // Cari mime type dari Content-Type header atau ekstensi
+      const mimeType = resp.headers.get("content-type") || "application/octet-stream";
+
+      // Buat record di DB
+      const newId = nanoid(16);
+      await db.insert(driveItems).values({
+        id: newId,
+        userId: tdriveUserId,
+        kind: "file",
+        name: fileName,
+        size: buf.length,
+        mimeType: mimeType,
+        storageRemoteId: `local://${localName}`,
+        storageProvider: "local",
+        syncStatus: "local",
+        fileHash,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      await ctx.api.deleteMessage(ctx.chat!.id, statusMsg.message_id);
+      await ctx.reply(
+        `✅ *${fileName}* diunduh (${formatSize(buf.length)}) dan tersimpan di TDrive!`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (err: any) {
+      await ctx.reply(`❌ Gagal mendownload: ${err.message || "Unknown error"}`);
+    }
+  });
+
+  // /remind <durasi> <pesan> — Jadwalkan pengingat
+  bot.command("remind", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+    const text = ctx.match?.trim() || "";
+    const matchDur = text.match(/^(\d+)(s|m|h|d)\s+(.+)/i);
+    if (!matchDur) {
+      return ctx.reply(
+        `⏰ *Pengingat*\n\n` +
+        `Gunakan: /remind <durasi> <pesan>\n` +
+        `Contoh: /remind 30m Backup file\n` +
+        `         /remind 2h Cek storage\n` +
+        `         /remind 1d Meeting notes\n\n` +
+        `Durasi: s=detik, m=menit, h=jam, d=hari`,
+        { parse_mode: "Markdown" }
+      );
+    }
+    const value = parseInt(matchDur[1], 10);
+    const unit = matchDur[2].toLowerCase();
+    const message = matchDur[3];
+    const ms = unit === "s" ? value * 1000 : unit === "m" ? value * 60_000 : unit === "h" ? value * 3600_000 : value * 86400_000;
+
+    if (ms < 10_000) return ctx.reply("⚠️ Minimal durasi 10 detik.");
+    if (ms > 365 * 86400_000) return ctx.reply("⚠️ Maksimal durasi 1 tahun.");
+
+    const chatId = ctx.chat!.id;
+    const when = new Date(Date.now() + ms);
+    const remaining = formatDuration(ms);
+
+    await ctx.reply(
+      `⏰ Pengingat disetel!\n\n` +
+      `📝 *${message}*\n` +
+      `🕐 Waktu: ${when.toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}\n` +
+      `⏳ Sisa: ${remaining}`,
+      { parse_mode: "Markdown" }
+    );
+
+    // Timer non-blocking
+    const timer = setTimeout(async () => {
+      try {
+        await ctx.api.sendMessage(chatId, `⏰ *Pengingat!*\n\n${message}`, { parse_mode: "Markdown" });
+      } catch {}
+    }, ms);
+    // Jangan biarkan timer mencegah exit
+    if (timer.unref) timer.unref();
   });
 
   bot.on("message:text", async (ctx) => {
