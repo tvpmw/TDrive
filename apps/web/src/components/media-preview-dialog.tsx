@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Download, ExternalLink, Film, Music, Image as ImageIcon, FileText, Star, Calendar } from "lucide-react";
+import { Download, ExternalLink, Film, Music, Image as ImageIcon, FileText, Star, Calendar, Folder, File, Archive, Loader2 } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 import type { DriveItem } from "@tdrive/shared";
 
@@ -22,6 +22,21 @@ interface TmdbMeta {
   rating: number | null;
 }
 
+interface ZipEntry {
+  name: string;
+  size: number;
+  compressedSize: number;
+  isDirectory: boolean;
+}
+
+interface ZipPreview {
+  entries: ZipEntry[];
+  fileCount: number;
+  dirCount: number;
+  totalUncompressed: number;
+  totalCompressed: number;
+}
+
 interface MediaPreviewDialogProps {
   item: DriveItem | null;
   onClose: () => void;
@@ -29,9 +44,12 @@ interface MediaPreviewDialogProps {
 
 export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
   const [meta, setMeta] = useState<TmdbMeta | null>(null);
+  const [zipData, setZipData] = useState<ZipPreview | null>(null);
+  const [zipLoading, setZipLoading] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!item) { setMeta(null); return; }
+    if (!item) { setMeta(null); setZipData(null); setZipError(null); return; }
     const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
     if (["mp4", "webm", "mkv", "mov", "avi"].includes(ext)) {
       apiClient.get<{ data: TmdbMeta }>(`/media/metadata?title=${encodeURIComponent(item.name)}`)
@@ -39,6 +57,21 @@ export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
         .catch(() => setMeta(null));
     } else {
       setMeta(null);
+    }
+
+    // ZIP preview instan
+    if (ext === "zip") {
+      setZipLoading(true);
+      setZipError(null);
+      setZipData(null);
+      apiClient.get<{ data: ZipPreview }>(`/files/${item.id}/zip-preview`)
+        .then((r) => setZipData(r.data.data))
+        .catch((err) => setZipError(err?.message || "Gagal membaca isi ZIP"))
+        .finally(() => setZipLoading(false));
+    } else {
+      setZipLoading(false);
+      setZipError(null);
+      setZipData(null);
     }
   }, [item]);
 
@@ -49,6 +82,7 @@ export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
   const isVideo = ["mp4", "webm", "mkv", "mov", "avi"].includes(ext);
   const isAudio = ["mp3", "wav", "ogg", "flac", "aac", "m4a"].includes(ext);
   const isPdf = ext === "pdf";
+  const isZip = ext === "zip";
 
   // Backend streaming / download URL — WAJIB same-origin (rewrite Next ke API) karena
   // elemen browser (img/video/audio/iframe/a) tidak bisa resolve hostname internal
@@ -156,7 +190,57 @@ export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
             />
           )}
 
-          {!isImage && !isVideo && !isAudio && !isPdf && (
+          {isZip && (
+            <div className="w-full max-h-[65vh] overflow-y-auto rounded-lg bg-card/80 border border-border p-3">
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-border/60 text-xs">
+                <span className="flex items-center gap-1.5 font-semibold">
+                  <Archive className="h-4 w-4 text-yellow-500" /> Isi Arsip
+                </span>
+                {zipData && !zipLoading && (
+                  <span className="text-muted-foreground">
+                    {zipData.fileCount} file • {formatBytes(zipData.totalUncompressed)}
+                    {zipData.totalCompressed > 0 && zipData.totalCompressed < zipData.totalUncompressed
+                      ? ` → ${formatBytes(zipData.totalCompressed)} terkompresi`
+                      : ""}
+                  </span>
+                )}
+              </div>
+
+              {zipLoading && (
+                <div className="flex items-center justify-center gap-2 py-8 text-muted-foreground text-xs">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Membaca isi ZIP...
+                </div>
+              )}
+
+              {zipError && !zipLoading && (
+                <p className="text-xs text-destructive py-4 text-center">{zipError}</p>
+              )}
+
+              {zipData && !zipLoading && (
+                <ul className="space-y-0.5 text-xs">
+                  {zipData.entries.slice(0, 200).map((e, i) => (
+                    <li key={i} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/50 min-w-0">
+                      {e.isDirectory
+                        ? <Folder className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                        : <File className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                      <span className="truncate flex-1 font-mono text-[11px]">{e.name}</span>
+                      {!e.isDirectory && <span className="shrink-0 text-muted-foreground">{formatBytes(e.size)}</span>}
+                    </li>
+                  ))}
+                  {zipData.entries.length > 200 && (
+                    <li className="px-2 py-1 text-[11px] text-muted-foreground italic">
+                      +{zipData.entries.length - 200} entri lainnya...
+                    </li>
+                  )}
+                  {zipData.entries.length === 0 && (
+                    <li className="px-2 py-4 text-center text-muted-foreground">Arsip kosong</li>
+                  )}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {!isImage && !isVideo && !isAudio && !isPdf && !isZip && (
             <div className="text-center p-8 space-y-3">
               <FileText className="h-12 w-12 text-muted-foreground mx-auto" />
               <p className="text-sm font-medium">Pratinjau tidak tersedia untuk format file ini</p>

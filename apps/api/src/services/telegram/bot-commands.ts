@@ -31,6 +31,10 @@ function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escMd(s: string): string {
+  return s.replace(/([\\`*_\[\]])/g, "\\$1");
+}
+
 function formatDate(date: Date | string): string {
   return new Date(date).toLocaleDateString("en-US", {
     year: "numeric", month: "short", day: "numeric",
@@ -213,7 +217,9 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       `/remind <durasi> <pesan> — Pengingat (contoh: /remind 30m Backup file)\n` +
       `/ask <query> — Tanya storage dengan natural language\n` +
       `/note <teks> — Simpan teks cepat ke folder Inbox (snippet sync)\n` +
-      `/cancel — Cancel current operation`,
+      `/find <query> — Cari file lalu kirim langsung ke chat\n` +
+      `/cancel — Cancel current operation\n\n` +
+      `📸 *Foto*: kirim foto apa saja → otomatis tersimpan di folder *Camera* dengan tag tanggal.`,
       { parse_mode: "Markdown" }
     );
   });
@@ -408,62 +414,13 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       return;
     }
 
-    // Download
+    // Download (via shared helper sendFileToChat)
     if (action === "dl") {
       const [item] = await db.select().from(driveItems)
         .where(and(eq(driveItems.userId, tdriveUserId), isNull(driveItems.deletedAt), eq(driveItems.id, id)))
         .limit(1);
       if (!item) return ctx.reply("File not found.");
-      if (item.kind !== "file") return ctx.reply("Folders cannot be downloaded.");
-
-      const statusMsg = await ctx.reply(`\u{1F4E5} Downloading <b>${escHtml(item.name)}</b>...`, { parse_mode: "HTML" });
-
-      try {
-        // Local file
-        if (item.storageRemoteId?.startsWith("local://")) {
-          const localPath = item.storageRemoteId.replace("local://", "");
-          const candidates = [localPath, resolve("../../storage-temp", localPath), join(process.cwd(), "storage-temp", localPath)];
-          const filePath = candidates.find((p) => existsSync(p));
-          if (!filePath) return ctx.reply(`\u274C File "${item.name}" not found on local disk.`);
-          const buf = await readFile(filePath);
-          await ctx.replyWithDocument(new InputFile(buf, item.name), { caption: `${item.name} — ${formatSize(item.size)}` });
-          return ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
-        }
-
-        // Telegram-stored file
-        if (item.storageRemoteId?.startsWith("telegram://")) {
-          const clean = item.storageRemoteId.replace("telegram://", "");
-          const [chStr, msgStr] = clean.split("/");
-          const channelId = parseInt(chStr, 10);
-          const messageId = parseInt(msgStr, 10);
-          if (isNaN(channelId) || isNaN(messageId)) return ctx.reply(`\u274C Invalid file reference for "${item.name}".`);
-
-          const [user] = await db.select().from(users).where(eq(users.id, tdriveUserId)).limit(1);
-          if (!user?.telegramApiIdEncrypted || !user?.telegramApiHashEncrypted || !user?.telegramSessionEncrypted) {
-            return ctx.reply(`\u274C Telegram storage credentials not configured.`);
-          }
-          const creds = {
-            apiId: Number(decryptGlobal(user.telegramApiIdEncrypted)),
-            apiHash: decryptGlobal(user.telegramApiHashEncrypted),
-            sessionString: decryptGlobal(user.telegramSessionEncrypted),
-          };
-          const { buffer } = await downloadFile(tdriveUserId, creds, channelId, messageId, 0, undefined, user.telegramStorageChannelName || env.TDRIVE_STORAGE_CHANNEL, (user.telegramStorageMode || "supergroup") === "supergroup");
-          if (!buffer || buffer.length === 0) return ctx.reply(`\u274C Failed to download "${item.name}" from Telegram storage.`);
-          await ctx.replyWithDocument(new InputFile(buffer, item.name), { caption: `${item.name} — ${formatSize(buffer.length)}` });
-          return ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
-        }
-
-        // Fallback: share link
-        const appUrl = env.APP_URL || "http://localhost:3000";
-        const token = item.shareToken || (await import("node:crypto")).randomUUID();
-        if (!item.shareToken) await db.update(driveItems).set({ shareToken: token, updatedAt: new Date() }).where(eq(driveItems.id, item.id));
-        await ctx.reply(`${item.name}\n\n${appUrl}/s/${token}`);
-        await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
-      } catch (err: any) {
-        console.error(`[bot] inline download error:`, err);
-        await ctx.reply(`\u274C Error downloading "${item.name}": ${err.message ?? "Unknown error"}`);
-        await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
-      }
+      await sendFileToChat(ctx, item, tdriveUserId);
       return;
     }
 
@@ -535,91 +492,55 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       return ctx.reply(`File "${name}" not found.`);
     }
 
-    const statusMsg = await ctx.reply(`📥 Downloading *${item.name}*...`, { parse_mode: "Markdown" });
+        await sendFileToChat(ctx, item, tdriveUserId);
+  });
 
-    try {
-      // 1. Local file — read from disk and send
-      if (item.storageRemoteId?.startsWith("local://")) {
-        const localPath = item.storageRemoteId.replace("local://", "");
-        const candidates = [
-          localPath,
-          resolve("../../storage-temp", localPath),
-          join(process.cwd(), "storage-temp", localPath),
-        ];
-        const filePath = candidates.find((p) => existsSync(p));
-        if (!filePath) {
-          return ctx.reply(`❌ File "${item.name}" not found on local disk.`);
-        }
-        const buf = await readFile(filePath);
-        await ctx.replyWithDocument(new InputFile(buf, item.name), {
-          caption: `📄 ${item.name} — ${formatSize(item.size)}`,
-        });
-        return ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-      }
-
-      // 2. Telegram-stored file — download via MTProto, send via Bot API
-      if (item.storageRemoteId?.startsWith("telegram://")) {
-        const clean = item.storageRemoteId.replace("telegram://", "");
-        const parts = clean.split("/");
-        const channelId = parseInt(parts[0], 10);
-        const messageId = parseInt(parts[1], 10);
-        if (isNaN(channelId) || isNaN(messageId)) {
-          return ctx.reply(`❌ Invalid file reference for "${item.name}".`);
-        }
-
-        // Get user's MTProto credentials
-        const [user] = await db.select().from(users).where(eq(users.id, tdriveUserId)).limit(1);
-        if (!user?.telegramApiIdEncrypted || !user?.telegramApiHashEncrypted || !user?.telegramSessionEncrypted) {
-          return ctx.reply(`❌ Telegram storage credentials not configured. Use the web dashboard to set up Telegram storage first.`);
-        }
-        const creds = {
-          apiId: Number(decryptGlobal(user.telegramApiIdEncrypted)),
-          apiHash: decryptGlobal(user.telegramApiHashEncrypted),
-          sessionString: decryptGlobal(user.telegramSessionEncrypted),
-        };
-
-        const { buffer } = await downloadFile(
-          tdriveUserId,
-          creds,
-          channelId,
-          messageId,
-          0,
-          undefined,
-          user.telegramStorageChannelName || env.TDRIVE_STORAGE_CHANNEL,
-          (user.telegramStorageMode || "supergroup") === "supergroup"
-        );
-        if (!buffer || buffer.length === 0) {
-          return ctx.reply(`❌ Failed to download "${item.name}" from Telegram storage.`);
-        }
-
-        await ctx.replyWithDocument(new InputFile(buffer, item.name), {
-          caption: `📄 ${item.name} — ${formatSize(buffer.length)}`,
-        });
-        return ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-      }
-
-      // 3. Unknown provider — fall back to share link
-      const appUrl = env.APP_URL || "http://localhost:3000";
-      if (item.shareToken) {
-        return ctx.reply(
-          `📥 *${item.name}*\n\n🔗 [Download Link](${appUrl}/s/${item.shareToken})`,
-          { parse_mode: "Markdown" }
-        );
-      }
-      // Auto-create share link
-      const { randomUUID } = await import("node:crypto");
-      const token = randomUUID();
-      await db.update(driveItems).set({ shareToken: token, updatedAt: new Date() }).where(eq(driveItems.id, item.id));
-      await ctx.reply(
-        `📥 *${item.name}* — Storage: ${item.storageProvider}\n\n🔗 [Download Link](${appUrl}/s/${token})`,
+  // /find <query> — Cari file lalu kirim langsung ke chat
+  bot.command("find", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+    const query = ctx.match?.trim();
+    if (!query) {
+      return ctx.reply(
+        `🔍 *Cari & Kirim File*\n\n` +
+        `Gunakan: /find <kata kunci>\n` +
+        `Contoh: /find invoice\n` +
+        `         /find foto liburan\n\n` +
+        `Bot akan mencari file di drive Anda dan mengirim hasilnya langsung ke chat.`,
         { parse_mode: "Markdown" }
       );
-      await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-    } catch (err: any) {
-      console.error(`[bot] /download error:`, err);
-      await ctx.reply(`❌ Error downloading "${item.name}": ${err.message ?? "Unknown error"}`);
-      await ctx.api.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
     }
+
+    const items = await db.select().from(driveItems)
+      .where(
+        and(
+          eq(driveItems.userId, tdriveUserId),
+          isNull(driveItems.deletedAt),
+          eq(driveItems.kind, "file"),
+          sql`(${ilike(driveItems.name, `%${query}%`)} OR COALESCE(${driveItems.extractedText},'') ILIKE ${`%${query}%`})`
+        )
+      )
+      .orderBy(desc(driveItems.updatedAt))
+      .limit(8);
+
+    if (items.length === 0) {
+      return ctx.reply(`🔍 Tidak ada file yang cocok dengan "${escMd(query)}".`);
+    }
+
+    // Kirim setiap file langsung (maks 8) — satu per satu
+    const statusMsg = await ctx.reply(
+      `🔍 *${items.length} file* cocok dengan "${escMd(query)}". Mengirim...`,
+      { parse_mode: "Markdown" }
+    );
+
+    for (const item of items) {
+      try {
+        await sendFileToChat(ctx, item, tdriveUserId);
+      } catch (err: any) {
+        console.error(`[bot] /find send error for ${item.name}:`, err);
+        await ctx.reply(`❌ Gagal kirim "${item.name}": ${err.message ?? "Unknown error"}`);
+      }
+    }
+    await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
   });
 
   // /share <filename>
@@ -825,7 +746,7 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
 
   // Upload — Handle file uploads (user replies to or sends a file)
   // Extract the core upload logic so both document and photo handlers can share it
-  async function handleFileUpload(ctx: Context, fileId: string, fileName: string, fileSize: number, mimeType: string) {
+  async function handleFileUpload(ctx: Context, fileId: string, fileName: string, fileSize: number, mimeType: string, opts?: { parentId?: string | null; tags?: string }) {
     if (!(await requireAuth(ctx))) return;
 
     // Check if there's a pending upload topic from /upload <topic_id>
@@ -921,7 +842,7 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
         userId: tdriveUserId,
         kind: "file",
         name: fileName,
-        parentId: null,
+        parentId: opts?.parentId ?? null,
         size: fileSize || buffer.length,
         mimeType: mimeType || "application/octet-stream",
         storageProvider,
@@ -929,6 +850,7 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
         storageChannelName: user?.telegramStorageChannelName || "TeleDrive Storage",
         syncStatus,
         fileHash,
+        tags: opts?.tags ?? null,
       });
 
       const syncLabel = syncStatus === "synced"
@@ -948,6 +870,74 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
     }
   }
 
+  // Helper: kirim file ke chat (dipakai action "dl" callback, /download, dan /find)
+  async function sendFileToChat(ctx: Context, item: any, tdriveUserId: string): Promise<void> {
+    if (item.kind !== "file") {
+      await ctx.reply("Folders cannot be downloaded.");
+      return;
+    }
+    const statusMsg = await ctx.reply(`\u{1F4E5} Downloading <b>${escHtml(item.name)}</b>...`, { parse_mode: "HTML" });
+
+    try {
+      // Local file
+      if (item.storageRemoteId?.startsWith("local://")) {
+        const localPath = item.storageRemoteId.replace("local://", "");
+        const candidates = [localPath, resolve("../../storage-temp", localPath), join(process.cwd(), "storage-temp", localPath)];
+        const filePath = candidates.find((p) => existsSync(p));
+        if (!filePath) {
+          await ctx.reply(`\u274C File "${item.name}" not found on local disk.`);
+          return;
+        }
+        const buf = await readFile(filePath);
+        await ctx.replyWithDocument(new InputFile(buf, item.name), { caption: `${item.name} — ${formatSize(item.size)}` });
+        await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
+        return;
+      }
+
+      // Telegram-stored file
+      if (item.storageRemoteId?.startsWith("telegram://")) {
+        const clean = item.storageRemoteId.replace("telegram://", "");
+        const [chStr, msgStr] = clean.split("/");
+        const channelId = parseInt(chStr, 10);
+        const messageId = parseInt(msgStr, 10);
+        if (isNaN(channelId) || isNaN(messageId)) {
+          await ctx.reply(`\u274C Invalid file reference for "${item.name}".`);
+          return;
+        }
+
+        const [user] = await db.select().from(users).where(eq(users.id, tdriveUserId)).limit(1);
+        if (!user?.telegramApiIdEncrypted || !user?.telegramApiHashEncrypted || !user?.telegramSessionEncrypted) {
+          await ctx.reply(`\u274C Telegram storage credentials not configured.`);
+          return;
+        }
+        const creds = {
+          apiId: Number(decryptGlobal(user.telegramApiIdEncrypted)),
+          apiHash: decryptGlobal(user.telegramApiHashEncrypted),
+          sessionString: decryptGlobal(user.telegramSessionEncrypted),
+        };
+        const { buffer } = await downloadFile(tdriveUserId, creds, channelId, messageId, 0, undefined, user.telegramStorageChannelName || env.TDRIVE_STORAGE_CHANNEL, (user.telegramStorageMode || "supergroup") === "supergroup");
+        if (!buffer || buffer.length === 0) {
+          await ctx.reply(`\u274C Failed to download "${item.name}" from Telegram storage.`);
+          return;
+        }
+        await ctx.replyWithDocument(new InputFile(buffer, item.name), { caption: `${item.name} — ${formatSize(buffer.length)}` });
+        await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
+        return;
+      }
+
+      // Fallback: share link
+      const appUrl = env.APP_URL || "http://localhost:3000";
+      const token = item.shareToken || (await import("node:crypto")).randomUUID();
+      if (!item.shareToken) await db.update(driveItems).set({ shareToken: token, updatedAt: new Date() }).where(eq(driveItems.id, item.id));
+      await ctx.reply(`${item.name}\n\n${appUrl}/s/${token}`);
+      await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
+    } catch (err: any) {
+      console.error(`[bot] download error:`, err);
+      await ctx.reply(`\u274C Error downloading "${item.name}": ${err.message ?? "Unknown error"}`);
+      await ctx.api.deleteMessage(ctx.chat?.id ?? 0, statusMsg.message_id).catch(() => {});
+    }
+  }
+
   // Handle document uploads
   bot.on("message:document", async (ctx) => {
     const doc = ctx.message.document;
@@ -956,14 +946,52 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
   });
 
   // Handle photo uploads (images sent as photos, not documents)
+  // Auto-organize: masuk folder "Camera" + auto-tag tanggal
   bot.on("message:photo", async (ctx) => {
     const photos = ctx.message.photo;
     if (!photos || photos.length === 0) return;
     // Pick the largest photo size
     const best = photos[photos.length - 1];
-    const ext = (ctx.message.caption || "photo").includes(".") ? "" : ".jpg";
-    const fileName = `photo_${Date.now()}${ext}`;
-    await handleFileUpload(ctx, best.file_id, fileName, best.file_size || 0, "image/jpeg");
+
+    // Nama file bermakna: IMG_YYYYMMDD_HHMMSS.jpg
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const fileName = `IMG_${stamp}.jpg`;
+
+    // Cari/auto-buat folder "Camera" di root (upsert aman terhadap race)
+    let cameraId: string | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const [cameraFolder] = await db.select().from(driveItems)
+        .where(and(eq(driveItems.userId, tdriveUserId), eq(driveItems.kind, "folder"), eq(driveItems.name, "Camera"), isNull(driveItems.deletedAt)))
+        .limit(1);
+      if (cameraFolder) {
+        cameraId = cameraFolder.id;
+        break;
+      }
+      try {
+        cameraId = nanoid(21);
+        await db.insert(driveItems).values({
+          id: cameraId,
+          userId: tdriveUserId,
+          kind: "folder",
+          name: "Camera",
+          parentId: null,
+          size: 0,
+        });
+        break;
+      } catch {
+        // Konflik race dengan foto paralel — coba query lagi di iterasi berikutnya
+        cameraId = null;
+      }
+    }
+
+    // Auto-tag: camera + bulan-tahun
+    const monthTag = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+    await handleFileUpload(ctx, best.file_id, fileName, best.file_size || 0, "image/jpeg", {
+      parentId: cameraId,
+      tags: `camera,${monthTag}`,
+    });
   });
 
   // /cancel — Cancel current operation

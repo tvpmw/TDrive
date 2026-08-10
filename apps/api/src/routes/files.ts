@@ -1060,4 +1060,47 @@ files.put("/:id/text", authMiddleware, async (c) => {
   return c.json({ data: updated });
 });
 
+// Preview isi ZIP (list entri) tanpa mengekstrak — untuk UI preview instan
+files.get("/:id/zip-preview", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+
+  const [item] = await db.select().from(driveItems)
+    .where(and(eq(driveItems.id, id), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+    .limit(1);
+  if (!item || item.kind !== "file") {
+    return c.json({ error: "Not Found", message: "File not found", statusCode: 404 }, 404);
+  }
+  const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext !== "zip") {
+    return c.json({ error: "Bad Request", message: "Not a ZIP file", statusCode: 400 }, 400);
+  }
+
+  try {
+    // Batasi ukuran ZIP untuk preview (hindari menarik archive raksasa ke memori)
+    if (item.size > 100 * 1024 * 1024) {
+      return c.json({ error: "Payload Too Large", message: "ZIP terlalu besar untuk preview instan (>100MB). Unduh untuk melihat isi.", statusCode: 413 }, 413);
+    }
+    const buf = await fetchFileBuffer(userId, item);
+    if (!buf || buf.length === 0) {
+      return c.json({ error: "Internal Server Error", message: "Failed to read file content", statusCode: 500 }, 500);
+    }
+    const { parseZipEntries } = await import("../services/zip-preview.js");
+    const entries = parseZipEntries(buf);
+    const files = entries.filter((e) => !e.isDirectory);
+    const dirs = entries.filter((e) => e.isDirectory);
+    return c.json({
+      data: {
+        entries,
+        fileCount: files.length,
+        dirCount: dirs.length,
+        totalUncompressed: files.reduce((s, e) => s + e.size, 0),
+        totalCompressed: files.reduce((s, e) => s + e.compressedSize, 0),
+      },
+    });
+  } catch (err: any) {
+    return c.json({ error: "Internal Server Error", message: err.message || "Failed to preview ZIP", statusCode: 500 }, 500);
+  }
+});
+
 export default files;
