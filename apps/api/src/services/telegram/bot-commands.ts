@@ -158,6 +158,8 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
       `/share <filename> — Generate public share link\n` +
       `/status — Storage usage & health\n` +
       `/stats — Detailed analytics\n` +
+      `/recent — 8 file terbaru\n` +
+      `/dupes — Deteksi file duplikat\n` +
       `/topics — List forum topics in supergroup\n` +
       `/upload — Send a file to store in TDrive\n` +
       `/cancel — Cancel current operation`,
@@ -922,6 +924,80 @@ export function registerBotCommands(bot: Bot, tdriveUserId: string) {
   });
 
   // Handle text messages (for state-based flows)
+  // /recent — File terbaru di drive
+  bot.command("recent", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+
+    const items = await db.select().from(driveItems)
+      .where(
+        and(
+          eq(driveItems.userId, tdriveUserId),
+          isNull(driveItems.deletedAt),
+          eq(driveItems.kind, "file")
+        )
+      )
+      .orderBy(desc(driveItems.updatedAt))
+      .limit(8);
+
+    if (items.length === 0) {
+      await ctx.reply("Belum ada file di drive Anda.");
+      return;
+    }
+
+    const lines = items.map((item, i) => {
+      const date = item.updatedAt ? new Date(item.updatedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : "?";
+      return `${i + 1}. ${getFileIcon(item.name)} *${item.name}* (${formatSize(item.size)}) — ${date}`;
+    });
+
+    await ctx.reply(
+      `🕐 *File Terbaru*\n\n${lines.join("\n")}\n\n💡 Ketik /search <kata kunci> untuk mencari.`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
+  // /dupes — Deteksi file duplikat (hash atau nama+ukuran)
+  bot.command("dupes", async (ctx) => {
+    if (!(await requireAuth(ctx))) return;
+
+    const items = await db.select().from(driveItems)
+      .where(
+        and(
+          eq(driveItems.userId, tdriveUserId),
+          isNull(driveItems.deletedAt),
+          eq(driveItems.kind, "file")
+        )
+      );
+
+    const map = new Map<string, typeof items>();
+    for (const item of items) {
+      const key = item.fileHash || `${item.name}-${item.size}`;
+      const group = map.get(key) || [];
+      group.push(item);
+      map.set(key, group);
+    }
+
+    const dupes = Array.from(map.values()).filter((g) => g.length > 1);
+
+    if (dupes.length === 0) {
+      await ctx.reply("✅ Tidak ada file duplikat ditemukan.");
+      return;
+    }
+
+    let totalSaved = 0;
+    const blocks = dupes.slice(0, 5).map((group) => {
+      const first = group[0];
+      const extras = group.length - 1;
+      const wasted = extras * (first.size || 0);
+      totalSaved += wasted;
+      return `📄 *${first.name}* — ${group.length}x (hemat ${formatSize(wasted)})`;
+    });
+
+    await ctx.reply(
+      `🔁 *File Duplikat Ditemukan: ${dupes.length} grup*\n\n${blocks.join("\n")}\n\n💾 Potensi hemat: *${formatSize(totalSaved)}*\nGunakan fitur Duplicates di web untuk membersihkan.`,
+      { parse_mode: "Markdown" }
+    );
+  });
+
   bot.on("message:text", async (ctx) => {
     if (!(await requireAuth(ctx))) return;
     const tgUserId = String(ctx.from?.id ?? "");

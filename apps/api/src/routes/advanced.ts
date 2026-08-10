@@ -96,7 +96,14 @@ advancedRouter.get("/share/:token/analytics", authMiddleware, async (c) => {
 
 // 6. File Versioning / Revisions
 advancedRouter.get("/files/:id/revisions", authMiddleware, async (c) => {
+  const userId = c.get("userId");
   const itemId = c.req.param("id");
+
+  // Ownership ketat — hanya pemilik item yang bisa melihat riwayat versi
+  const [item] = await db.select().from(driveItems).where(eq(driveItems.id, itemId)).limit(1);
+  if (!item || item.userId !== userId) {
+    return c.json({ error: "Not Found" }, 404);
+  }
 
   const revisions = await db
     .select()
@@ -105,6 +112,62 @@ advancedRouter.get("/files/:id/revisions", authMiddleware, async (c) => {
     .orderBy(desc(fileRevisions.revisionNumber));
 
   return c.json({ revisions });
+});
+
+// 6b. Restore a file to a specific revision
+advancedRouter.post("/files/:id/revisions/:revisionId/restore", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const itemId = c.req.param("id");
+  const revisionId = c.req.param("revisionId");
+
+  const [item] = await db.select().from(driveItems)
+    .where(and(eq(driveItems.id, itemId), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+    .limit(1);
+  if (!item) {
+    return c.json({ error: "Not Found", message: "File not found" }, 404);
+  }
+
+  const [revision] = await db.select().from(fileRevisions)
+    .where(and(eq(fileRevisions.id, revisionId), eq(fileRevisions.itemId, itemId)))
+    .limit(1);
+  if (!revision) {
+    return c.json({ error: "Not Found", message: "Revision not found" }, 404);
+  }
+
+  // Simpan state saat ini sebagai revisi baru (agar restore bisa dibatalkan)
+  const [lastRev] = await db.select().from(fileRevisions)
+    .where(eq(fileRevisions.itemId, itemId))
+    .orderBy(desc(fileRevisions.revisionNumber))
+    .limit(1);
+  const nextNumber = (lastRev?.revisionNumber ?? 0) + 1;
+
+  await db.insert(fileRevisions).values({
+    id: nanoid(16),
+    itemId,
+    revisionNumber: nextNumber,
+    size: item.size,
+    telegramMessageId: item.storageRemoteId ?? null,
+    storageRemoteId: item.storageRemoteId ?? null,
+    storageProvider: item.storageProvider ?? null,
+    fileHash: item.fileHash ?? null,
+    createdBy: userId,
+  });
+
+  // Terapkan state revisi ke item (termasuk fileHash agar dedupe/duplicates tetap benar)
+  const remote = revision.storageRemoteId ?? item.storageRemoteId;
+  const isLocal = (remote ?? "").startsWith("local://");
+  await db.update(driveItems).set({
+    storageRemoteId: remote,
+    storageProvider: revision.storageProvider ?? item.storageProvider,
+    size: revision.size,
+    fileHash: revision.fileHash ?? null,
+    syncStatus: isLocal ? "local" : "synced",
+    syncError: null,
+    updatedAt: new Date(),
+  }).where(eq(driveItems.id, itemId));
+
+  const [updated] = await db.select().from(driveItems).where(eq(driveItems.id, itemId)).limit(1);
+  return c.json({ data: updated, restoredRevision: revision.revisionNumber });
 });
 
 // 7. Manage Telegram Storage Channels

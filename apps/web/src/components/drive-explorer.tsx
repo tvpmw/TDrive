@@ -8,7 +8,7 @@ import {
   File, Folder, Upload, Trash2, Search, FolderPlus, Cloud, CloudOff,
   Download, Edit3, HardDrive, LayoutGrid, List, MoreHorizontal,
   Image, Film, Music, Archive, Code, FileText, RefreshCw, ArrowUpRight,
-  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images,
+  ChevronRight, Database, Eye, Play, Share2, BarChart2, CheckSquare, Square, Images, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ import { useUploadManager } from "@/components/upload-manager";
 import { SmartFolders } from "@/components/smart-folders";
 import { CommandPaletteTrigger } from "@/components/command-palette";
 import { BatchRenameModal } from "@/components/batch-rename-modal";
+import { RevisionsDialog } from "@/components/revisions-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -110,6 +111,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [showBatchRename, setShowBatchRename] = useState(false);
+  const [revisionsItem, setRevisionsItem] = useState<{ id: string; name: string } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -358,8 +360,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
 
       if (categoryFilter === "all") return true;
       if (categoryFilter === "starred") return item.isStarred === 1;
-      if (categoryFilter === "large") return item.kind === "file" && item.size > 10 * 1024 * 1024;
-      if (categoryFilter === "recent" || categoryFilter === "archive") return item.kind === "file";
+      if (categoryFilter === "large") return item.kind === "file" && item.size > 500 * 1024 * 1024;
+      if (categoryFilter === "recent") return item.kind === "file" && Date.now() - new Date(item.updatedAt).getTime() < 7 * 24 * 60 * 60 * 1000;
+      if (categoryFilter === "archive") return item.kind === "file" && Date.now() - new Date(item.updatedAt).getTime() > 180 * 24 * 60 * 60 * 1000;
       if (item.kind === "folder") return false;
       const ext = item.name.includes(".") ? item.name.split(".").pop()?.toLowerCase() ?? "" : "";
       if (categoryFilter === "images" || categoryFilter === "photos") return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(ext);
@@ -481,6 +484,19 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
       const a = document.createElement("a");
       a.href = url; a.download = item.name; a.click();
       URL.revokeObjectURL(url);
+    });
+  };
+
+  // Download seluruh isi folder sebagai ZIP
+  const downloadFolderZip = (item: DriveItem) => {
+    apiClient.get(`/folders/${item.id}/zip`, { responseType: "blob" }).then((r) => {
+      const url = URL.createObjectURL(r.data);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${item.name}.zip`; a.click();
+      URL.revokeObjectURL(url);
+    }).catch((err) => {
+      const msg = err?.response?.data?.message;
+      if (msg) alert(`Gagal membuat ZIP: ${msg}`);
     });
   };
 
@@ -764,8 +780,8 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           <input ref={folderInputRef} type="file" multiple {...({ webkitdirectory: "" } as any)} className="hidden" onChange={handleFolderUpload} />
         </div>
 
-        {/* Smart Virtual Folders */}
-        <SmartFolders activeFilter={categoryFilter} onSelectFilter={(f) => setCategoryFilter(f)} />
+        {/* Smart Virtual Folders — count asli dari data */}
+        <SmartFolders activeFilter={categoryFilter} onSelectFilter={(f) => setCategoryFilter(f)} items={items} isLoading={isLoading} />
 
         {/* Media Gallery Category Filter Pills */}
         <div className="flex items-center gap-1.5 px-1 py-1.5 overflow-x-auto text-xs scrollbar-none border-b border-border/40">
@@ -905,9 +921,14 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             {item.kind === "folder" && (
-                              <DropdownMenuItem onClick={() => router.push(`/drive/${item.id}`)}>
-                                <ArrowUpRight className="h-4 w-4 mr-2" /> Open
-                              </DropdownMenuItem>
+                              <>
+                                <DropdownMenuItem onClick={() => router.push(`/drive/${item.id}`)}>
+                                  <ArrowUpRight className="h-4 w-4 mr-2" /> Open
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => downloadFolderZip(item)}>
+                                  <Archive className="h-4 w-4 mr-2 text-yellow-500" /> Download ZIP
+                                </DropdownMenuItem>
+                              </>
                             )}
                             {item.kind === "file" && (
                               <>
@@ -922,6 +943,9 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setShareItem(item)}>
                                   <Share2 className="h-4 w-4 mr-2 text-blue-500" /> Bagikan Link
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>
+                                  <History className="h-4 w-4 mr-2 text-purple-400" /> Riwayat Versi
                                 </DropdownMenuItem>
                                 {item.syncStatus !== "synced" && (
                                   <DropdownMenuItem onClick={() => syncMutation.mutate(item.id)}>
@@ -940,13 +964,19 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
-                    {item.kind === "folder" && <ContextMenuItem onClick={() => router.push(`/drive/${item.id}`)}>Open</ContextMenuItem>}
+                    {item.kind === "folder" && (
+                      <>
+                        <ContextMenuItem onClick={() => router.push(`/drive/${item.id}`)}>Open</ContextMenuItem>
+                        <ContextMenuItem onClick={() => downloadFolderZip(item)}>Download ZIP</ContextMenuItem>
+                      </>
+                    )}
                     {item.kind === "file" && (
                       <>
                         <ContextMenuItem onClick={() => setPreviewMediaItem(item)}>Pratinjau Media</ContextMenuItem>
                         <ContextMenuItem onClick={() => startDownload(item)}>Download</ContextMenuItem>
                         <ContextMenuItem onClick={() => setEditingFile({ id: item.id, name: item.name })}>Edit Text</ContextMenuItem>
                         <ContextMenuItem onClick={() => setShareItem(item)}>Bagikan Link</ContextMenuItem>
+                        <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
                       </>
@@ -1003,13 +1033,19 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent>
-                    {item.kind === "folder" && <ContextMenuItem onClick={() => router.push(`/drive/${item.id}`)}>Open</ContextMenuItem>}
+                    {item.kind === "folder" && (
+                      <>
+                        <ContextMenuItem onClick={() => router.push(`/drive/${item.id}`)}>Open</ContextMenuItem>
+                        <ContextMenuItem onClick={() => downloadFolderZip(item)}>Download ZIP</ContextMenuItem>
+                      </>
+                    )}
                     {item.kind === "file" && (
                       <>
                         <ContextMenuItem onClick={() => setPreviewMediaItem(item)}>Pratinjau Media</ContextMenuItem>
                         <ContextMenuItem onClick={() => startDownload(item)}>Download</ContextMenuItem>
                         <ContextMenuItem onClick={() => setEditingFile({ id: item.id, name: item.name })}>Edit Text</ContextMenuItem>
                         <ContextMenuItem onClick={() => setShareItem(item)}>Bagikan Link</ContextMenuItem>
+                        <ContextMenuItem onClick={() => setRevisionsItem({ id: item.id, name: item.name })}>Riwayat Versi</ContextMenuItem>
                         {item.syncStatus !== "synced" && <ContextMenuItem onClick={() => syncMutation.mutate(item.id)}>Sync to Telegram</ContextMenuItem>}
                         <ContextMenuSeparator />
                       </>
@@ -1107,6 +1143,16 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
         )}
         {previewMediaItem && <MediaPreviewDialog item={previewMediaItem} onClose={() => setPreviewMediaItem(null)} />}
         <ShareDialog item={shareItem} open={!!shareItem} onOpenChange={(open) => !open && setShareItem(null)} onUpdated={() => queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) })} />
+        <RevisionsDialog
+          itemId={revisionsItem?.id ?? ""}
+          itemName={revisionsItem?.name ?? ""}
+          open={!!revisionsItem}
+          onOpenChange={(open) => !open && setRevisionsItem(null)}
+          onRestored={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.files(parentId) });
+            queryClient.refetchQueries({ queryKey: queryKeys.files(parentId) });
+          }}
+        />
       </div>
     </TooltipProvider>
   );

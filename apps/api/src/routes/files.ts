@@ -16,6 +16,8 @@ import { uploadFile, downloadFile } from "../services/telegram/index.js";
 import { getNotificationEnabled, sendTelegramNotification } from "../services/telegram/notifications.js";
 import { enqueueSync } from "../queue/index.js";
 import { emitActivity } from "../lib/event-bus.js";
+import { fileRevisions } from "../db/schema/advanced-features.js";
+import { nanoid } from "nanoid";
 import type { TelegramCredentials } from "../services/telegram/client.js";
 import { EDITABLE_EXTENSIONS } from "@tdrive/shared";
 
@@ -147,6 +149,10 @@ files.post("/upload", authMiddleware, async (c) => {
   const formData = await c.req.formData();
   const file = formData.get("file") as File | null;
   const parentId = formData.get("parent_id") as string | null;
+  // E2EE metadata (client-side encryption — server only stores ciphertext + IV/salt)
+  const isEncrypted = formData.get("is_encrypted") === "1" || formData.get("is_encrypted") === "true";
+  const encryptionIv = (formData.get("encryption_iv") as string | null) ?? null;
+  const keySalt = (formData.get("key_salt") as string | null) ?? null;
 
   if (!file) {
     return c.json({ error: "Bad Request", message: "No file provided", statusCode: 400 }, 400);
@@ -165,6 +171,74 @@ files.post("/upload", authMiddleware, async (c) => {
   // Calculate SHA256 Hash for instant upload deduplication
   const cryptoModule = await import("node:crypto");
   const fileHash = cryptoModule.createHash("sha256").update(buffer).digest("hex");
+
+  // File Versioning: if a file with the same name exists in the same folder,
+  // save the old content as a revision and replace the item in place (Google-Drive style).
+  const sameNameWhere = parentId
+    ? and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, file.name), eq(driveItems.parentId, parentId), isNull(driveItems.deletedAt))
+    : and(eq(driveItems.userId, userId), eq(driveItems.kind, "file"), eq(driveItems.name, file.name), isNull(driveItems.parentId), isNull(driveItems.deletedAt));
+
+  const [sameNameItem] = await db.select().from(driveItems).where(sameNameWhere).limit(1);
+
+  if (sameNameItem) {
+    if (sameNameItem.fileHash === fileHash) {
+      // Konten identik — anggap upload instan, tanpa revisi baru
+      emitActivity({
+        type: "file.uploaded",
+        message: `File “${sameNameItem.name}” diunggah (konten identik)`,
+        itemName: sameNameItem.name,
+        userId,
+      });
+      return c.json({ data: sameNameItem, instantUpload: true }, 201);
+    }
+
+    // Simpan state lama sebagai revisi
+    const [lastRev] = await db.select().from(fileRevisions)
+      .where(eq(fileRevisions.itemId, sameNameItem.id))
+      .orderBy(desc(fileRevisions.revisionNumber))
+      .limit(1);
+    const revNumber = (lastRev?.revisionNumber ?? 0) + 1;
+
+    await db.insert(fileRevisions).values({
+      id: nanoid(24),
+      itemId: sameNameItem.id,
+      revisionNumber: revNumber,
+      size: sameNameItem.size,
+      telegramMessageId: sameNameItem.storageRemoteId ?? null,
+      storageRemoteId: sameNameItem.storageRemoteId ?? null,
+      storageProvider: sameNameItem.storageProvider ?? null,
+      fileHash: sameNameItem.fileHash ?? null,
+      createdBy: userId,
+    });
+
+    // Ganti konten item yang sama (id tetap, remote baru)
+    await writeFile(stagedPath, buffer);
+    await db.update(driveItems).set({
+      size: file.size,
+      mimeType: file.type || "application/octet-stream",
+      storageProvider: "local",
+      storageRemoteId: remoteId,
+      storageChannelName: "TeleDrive Storage",
+      syncStatus: "local",
+      fileHash,
+      isEncrypted: isEncrypted ? 1 : sameNameItem.isEncrypted ?? 0,
+      encryptionIv: isEncrypted ? encryptionIv : sameNameItem.encryptionIv,
+      keySalt: isEncrypted ? keySalt : sameNameItem.keySalt,
+      updatedAt: new Date(),
+    }).where(eq(driveItems.id, sameNameItem.id));
+
+    const [item] = await db.select().from(driveItems).where(eq(driveItems.id, sameNameItem.id)).limit(1);
+    const createdItem = item;
+    runBackgroundSync(userId, createdItem, stagedPath);
+
+    emitActivity({
+      type: "file.uploaded",
+      message: `File “${createdItem.name}” diunggah (versi ${revNumber + 1})`,
+      itemName: createdItem.name,
+      userId,
+    });
+    return c.json({ data: createdItem, versioned: true, revisionNumber: revNumber + 1 }, 201);
+  }
 
   // Check if hash already exists in database (Deduplication / Instant 0-sec Upload)
   const [existingFile] = await db.select().from(driveItems)
@@ -188,6 +262,10 @@ files.post("/upload", authMiddleware, async (c) => {
       telegramTopicId: existingFile.telegramTopicId,
       syncStatus: existingFile.syncStatus,
       fileHash: fileHash,
+      // Salin metadata E2EE agar salinan duplikat tetap bisa didekripsi
+      isEncrypted: existingFile.isEncrypted ?? 0,
+      encryptionIv: existingFile.isEncrypted ? existingFile.encryptionIv : null,
+      keySalt: existingFile.isEncrypted ? existingFile.keySalt : null,
     });
 
     const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
@@ -202,12 +280,6 @@ files.post("/upload", authMiddleware, async (c) => {
 
   await writeFile(stagedPath, buffer);
 
-  // Auto-sync must never break upload response.
-  // Save metadata immediately, then retry Telegram sync in background.
-  let finalSyncStatus: "local" | "synced" | "sync_failed" = "local";
-  let finalRemoteId = remoteId;
-  let syncError: string | null = null;
-
   const id = newId();
   await db.insert(driveItems).values({
     id,
@@ -218,72 +290,18 @@ files.post("/upload", authMiddleware, async (c) => {
     size: file.size,
     mimeType: file.type || "application/octet-stream",
     storageProvider: "local",
-    storageRemoteId: finalRemoteId,
+    storageRemoteId: remoteId,
     storageChannelName: "TeleDrive Storage",
     syncStatus: "local",
     fileHash: fileHash,
+    isEncrypted: isEncrypted ? 1 : 0,
+    encryptionIv: isEncrypted ? encryptionIv : null,
+    keySalt: isEncrypted ? keySalt : null,
   });
 
   const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
   const createdItem = item;
-
-  // Background Telegram sync — fire-and-forget with best-effort error capture
-  const userCredsForSync = await getUserTelegramCreds(userId).catch(() => null);
-  if (createdItem && userCredsForSync) {
-    Promise.resolve().then(async () => {
-      try {
-        let topicId: string | number | undefined = undefined;
-        if (createdItem.parentId) {
-          const [parentFolder] = await db.select().from(driveItems).where(eq(driveItems.id, createdItem.parentId)).limit(1);
-          if (parentFolder?.telegramTopicId) topicId = parentFolder.telegramTopicId;
-        }
-        const result = await uploadFile(
-          userId,
-          userCredsForSync.creds,
-          stagedPath,
-          createdItem.name,
-          createdItem.mimeType ?? undefined,
-          topicId,
-          userCredsForSync.channelName,
-          userCredsForSync.isSupergroup
-        );
-        await db.update(driveItems).set({
-          storageProvider: userCredsForSync.isSupergroup ? "telegram-supergroup-topic" : "telegram-private-channel",
-          storageRemoteId: `telegram://${result.channelId}/${result.messageId}`,
-          storageChannelName: userCredsForSync.channelName || "TeleDrive Storage",
-          syncStatus: "synced",
-          updatedAt: new Date(),
-        }).where(eq(driveItems.id, createdItem.id));
-        await unlink(stagedPath).catch(() => {});
-        // Notifikasi upload selesai (best-effort)
-        if (await getNotificationEnabled(userId)) {
-          const sizeMB = ((createdItem.size || 0) / 1024 / 1024).toFixed(2);
-          sendTelegramNotification(
-            userId,
-            userCredsForSync.creds,
-            `✅ TDrive — Upload selesai\n📄 ${createdItem.name}\n📦 ${sizeMB} MB`,
-            userCredsForSync.channelName
-          ).catch(() => {});
-        }
-      } catch (err: any) {
-        await db.update(driveItems).set({
-          syncStatus: "sync_failed",
-          syncError: err?.message || "Sync failed",
-          updatedAt: new Date(),
-        }).where(eq(driveItems.id, createdItem.id));
-        await unlink(stagedPath).catch(() => {});
-        // Notifikasi upload gagal (best-effort)
-        if (await getNotificationEnabled(userId)) {
-          sendTelegramNotification(
-            userId,
-            userCredsForSync.creds,
-            `❌ TDrive — Upload gagal\n📄 ${createdItem.name}\n⚠️ ${err?.message || "Sync error"}`,
-            userCredsForSync.channelName
-          ).catch(() => {});
-        }
-      }
-    }).catch(() => {});
-  }
+  runBackgroundSync(userId, createdItem, stagedPath);
 
   emitActivity({
     type: "file.uploaded",
@@ -342,6 +360,71 @@ async function getUserTelegramCreds(userId: string): Promise<{ creds: TelegramCr
     channelName: user.telegramStorageChannelName || env.TDRIVE_STORAGE_CHANNEL,
     isSupergroup: (user.telegramStorageMode || "supergroup") === "supergroup",
   };
+}
+
+// Background Telegram sync — fire-and-forget with best-effort error capture.
+// Shared by fresh uploads and versioned (same-name replace) uploads.
+function runBackgroundSync(
+  userId: string,
+  createdItem: { id: string; name: string; mimeType: string | null; parentId: string | null; size: number } | null | undefined,
+  stagedPath: string
+) {
+  if (!createdItem) return;
+  Promise.resolve().then(async () => {
+    const userCredsForSync = await getUserTelegramCreds(userId).catch(() => null);
+    if (!userCredsForSync) return;
+    try {
+      let topicId: string | number | undefined = undefined;
+      if (createdItem.parentId) {
+        const [parentFolder] = await db.select().from(driveItems).where(eq(driveItems.id, createdItem.parentId)).limit(1);
+        if (parentFolder?.telegramTopicId) topicId = parentFolder.telegramTopicId;
+      }
+      const result = await uploadFile(
+        userId,
+        userCredsForSync.creds,
+        stagedPath,
+        createdItem.name,
+        createdItem.mimeType ?? undefined,
+        topicId,
+        userCredsForSync.channelName,
+        userCredsForSync.isSupergroup
+      );
+      await db.update(driveItems).set({
+        storageProvider: userCredsForSync.isSupergroup ? "telegram-supergroup-topic" : "telegram-private-channel",
+        storageRemoteId: `telegram://${result.channelId}/${result.messageId}`,
+        storageChannelName: userCredsForSync.channelName || "TeleDrive Storage",
+        syncStatus: "synced",
+        updatedAt: new Date(),
+      }).where(eq(driveItems.id, createdItem.id));
+      await unlink(stagedPath).catch(() => {});
+      // Notifikasi upload selesai (best-effort)
+      if (await getNotificationEnabled(userId)) {
+        const sizeMB = ((createdItem.size || 0) / 1024 / 1024).toFixed(2);
+        sendTelegramNotification(
+          userId,
+          userCredsForSync.creds,
+          `✅ TDrive — Upload selesai\n📄 ${createdItem.name}\n📦 ${sizeMB} MB`,
+          userCredsForSync.channelName
+        ).catch(() => {});
+      }
+    } catch (err: any) {
+      await db.update(driveItems).set({
+        syncStatus: "sync_failed",
+        syncError: err?.message || "Sync failed",
+        updatedAt: new Date(),
+      }).where(eq(driveItems.id, createdItem.id));
+      await unlink(stagedPath).catch(() => {});
+      // Notifikasi upload gagal (best-effort)
+      if (await getNotificationEnabled(userId)) {
+        sendTelegramNotification(
+          userId,
+          userCredsForSync.creds,
+          `❌ TDrive — Upload gagal\n📄 ${createdItem.name}\n⚠️ ${err?.message || "Sync error"}`,
+          userCredsForSync.channelName
+        ).catch(() => {});
+      }
+    }
+  }).catch(() => {});
 }
 
 // Download or Stream file (supports Range requests for media streaming)

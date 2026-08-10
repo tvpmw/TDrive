@@ -38,6 +38,8 @@ export interface DriveItem {
   hasSharePassword?: boolean;
   downloadCount?: number;
   isEncrypted?: number;
+  encryptionIv?: string | null;
+  keySalt?: string | null;
   maxDownloads?: number | null;
   fileHash?: string | null;
   extractedText?: string | null;

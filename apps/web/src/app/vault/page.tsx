@@ -23,7 +23,13 @@ import {
   Trash2,
   CheckCircle2,
   Loader2,
+  FileLock2,
+  UploadCloud,
+  DownloadCloud,
+  KeyRound,
 } from "lucide-react";
+import { encryptBuffer, decryptBuffer } from "@/lib/e2ee";
+import type { DriveItem } from "@tdrive/shared";
 
 interface PasskeyCredential {
   id: string;
@@ -41,6 +47,14 @@ export default function VaultPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const [vaultPass, setVaultPass] = useState("");
+  const [e2eeFileName, setE2eeFileName] = useState<string | null>(null);
+  const [e2eeFile, setE2eeFile] = useState<File | null>(null);
+  const [e2eeBusy, setE2eeBusy] = useState<string | null>(null);
+  const [encryptedFiles, setEncryptedFiles] = useState<DriveItem[]>([]);
+  const [decryptPass, setDecryptPass] = useState("");
+  const [decryptTargetId, setDecryptTargetId] = useState<string | null>(null);
+  const [e2eeInfo, setE2eeInfo] = useState<string | null>(null);
 
   const loadPasskeys = useCallback(async () => {
     try {
@@ -56,7 +70,85 @@ export default function VaultPage() {
 
   useEffect(() => {
     loadPasskeys();
+    loadEncryptedFiles();
   }, [loadPasskeys]);
+
+  // Ambil semua file terenkripsi (recursive) milik user
+  const loadEncryptedFiles = useCallback(async () => {
+    try {
+      const res = await apiClient.get("/files", { params: { recursive: "true" } });
+      const all = (res.data?.data ?? []) as DriveItem[];
+      setEncryptedFiles(all.filter((i) => i.kind === "file" && i.isEncrypted === 1));
+    } catch {
+      setEncryptedFiles([]);
+    }
+  }, []);
+
+  // Enkripsi file client-side (AES-256-GCM + PBKDF2) lalu upload ke drive
+  const handleEncryptUpload = async () => {
+    if (!e2eeFile) {
+      flash(false, "Pilih file terlebih dahulu");
+      return;
+    }
+    if (vaultPass.length < 4) {
+      flash(false, "Passphrase minimal 4 karakter");
+      return;
+    }
+    setE2eeBusy("encrypt");
+    try {
+      const buffer = await e2eeFile.arrayBuffer();
+      const { ciphertext, ivHex, saltHex } = await encryptBuffer(buffer, vaultPass);
+      const blob = new Blob([ciphertext], { type: "application/octet-stream" });
+      const formData = new FormData();
+      formData.append("file", blob, `${e2eeFile.name}.enc`);
+      formData.append("is_encrypted", "1");
+      formData.append("encryption_iv", ivHex);
+      formData.append("key_salt", saltHex);
+      await apiClient.post("/files/upload", formData, { headers: { "Content-Type": "multipart/form-data" } });
+      setE2eeInfo("File terenkripsi & tersimpan. Passphrase TIDAK dikirim ke server — simpan baik-baik!");
+      setE2eeFile(null);
+      setE2eeFileName(null);
+      await loadEncryptedFiles();
+      flash(true, "File terenkripsi & diunggah ✅");
+    } catch (err: any) {
+      flash(false, err?.message || "Enkripsi gagal");
+    } finally {
+      setE2eeBusy(null);
+    }
+  };
+
+  // Unduh file terenkripsi lalu dekripsi client-side
+  const handleDecrypt = async (item: DriveItem) => {
+    if (decryptPass.length < 4) {
+      flash(false, "Masukkan passphrase vault untuk mendekripsi");
+      return;
+    }
+    setE2eeBusy(`decrypt-${item.id}`);
+    try {
+      const res = await apiClient.get(`/files/${item.id}/download`, { responseType: "blob" });
+      const ciphertext = await res.data.arrayBuffer();
+      const ivHex = item.encryptionIv ?? "";
+      const saltHex = item.keySalt ?? "";
+      if (!ivHex || !saltHex) {
+        throw new Error("Metadata enkripsi tidak ditemukan");
+      }
+      const plain = await decryptBuffer(ciphertext, decryptPass, ivHex, saltHex);
+      const originalName = item.name.replace(/\.enc$/, "");
+      const url = URL.createObjectURL(new Blob([plain]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = originalName;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      flash(true, `Didekripsi: ${originalName} ✅`);
+    } catch (err: any) {
+      flash(false, err?.message?.includes("operation failed") || err?.message?.includes("decrypt")
+        ? "Dekripsi gagal — passphrase salah atau data rusak"
+        : err?.message || "Dekripsi gagal");
+    } finally {
+      setE2eeBusy(null);
+    }
+  };
 
   const flash = (ok: boolean, text: string) => {
     setStatus({ ok, text });
@@ -254,6 +346,119 @@ export default function VaultPage() {
                   {busy === "unlock" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Fingerprint className="h-3.5 w-3.5 mr-1.5" />}
                   {vaultUnlocked ? "Vault Terbuka — Unlock Lagi" : "Unlock Vault dengan Biometrik"}
                 </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* E2EE File Vault — enkripsi & dekripsi file nyata (client-side) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="border-emerald-500/30 bg-card/60 backdrop-blur-md">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold flex items-center gap-2 text-foreground">
+                  <FileLock2 className="h-4 w-4 text-emerald-400" /> Enkripsi File ke Vault
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  File dienkripsi di perangkat Anda (AES-256-GCM + PBKDF2 100k) sebelum diunggah. Server hanya menyimpan ciphertext.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Passphrase Vault</Label>
+                  <Input
+                    type="password"
+                    value={vaultPass}
+                    onChange={(e) => setVaultPass(e.target.value)}
+                    placeholder="Kunci enkripsi Anda (tidak dikirim ke server)"
+                    className="bg-background border-emerald-500/30 text-xs"
+                  />
+                </div>
+                <label className="flex items-center justify-between gap-3 px-3.5 py-3 rounded-xl border border-dashed border-emerald-500/40 bg-emerald-500/5 cursor-pointer hover:bg-emerald-500/10 transition-colors">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <UploadCloud className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs text-muted-foreground truncate">
+                      {e2eeFileName ? e2eeFileName : "Pilih file untuk dienkripsi…"}
+                    </span>
+                  </div>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null;
+                      setE2eeFile(f);
+                      setE2eeFileName(f?.name ?? null);
+                    }}
+                  />
+                  <span className="text-[11px] font-semibold text-emerald-400 shrink-0">Browse</span>
+                </label>
+                <Button
+                  size="sm"
+                  onClick={handleEncryptUpload}
+                  disabled={e2eeBusy !== null || !e2eeFile}
+                  className="w-full h-9 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white"
+                >
+                  {e2eeBusy === "encrypt" ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Lock className="h-3.5 w-3.5 mr-1.5" />}
+                  {e2eeBusy === "encrypt" ? "Mengenkripsi & Mengunggah…" : "Enkripsi & Simpan ke Vault"}
+                </Button>
+                {e2eeInfo && (
+                  <p className="text-[11px] text-emerald-400/80 bg-emerald-500/5 border border-emerald-500/20 rounded-lg px-3 py-2">
+                    {e2eeInfo}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-purple-500/30 bg-card/60 backdrop-blur-md">
+              <CardHeader>
+                <CardTitle className="text-sm font-semibold flex items-center gap-2 text-foreground">
+                  <KeyRound className="h-4 w-4 text-purple-400" /> Dekripsi dari Vault
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Pilih file terenkripsi, masukkan passphrase, file didekripsi di perangkat Anda lalu diunduh.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">Passphrase Vault</Label>
+                  <Input
+                    type="password"
+                    value={decryptPass}
+                    onChange={(e) => setDecryptPass(e.target.value)}
+                    placeholder="Passphrase untuk mendekripsi"
+                    className="bg-background border-purple-500/30 text-xs"
+                  />
+                </div>
+                <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                  {encryptedFiles.length === 0 && (
+                    <p className="text-[11px] text-muted-foreground text-center py-4">
+                      Belum ada file terenkripsi. Enkripsi file di kolom sebelah kiri.
+                    </p>
+                  )}
+                  {encryptedFiles.map((f) => (
+                    <div
+                      key={f.id}
+                      className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border transition-colors ${
+                        decryptTargetId === f.id
+                          ? "border-purple-500/50 bg-purple-500/10"
+                          : "border-border/50 bg-background/40 hover:bg-background/70"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0" onClick={() => setDecryptTargetId(f.id)}>
+                        <FileLock2 className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                        <span className="text-xs truncate">{f.name}</span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={e2eeBusy !== null}
+                        onClick={() => handleDecrypt(f)}
+                        className="h-7 text-[11px] shrink-0 border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
+                      >
+                        {e2eeBusy === `decrypt-${f.id}` ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <DownloadCloud className="h-3 w-3 mr-1" />}
+                        Dekripsi
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           </div>

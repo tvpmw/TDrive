@@ -7,9 +7,12 @@ import { authMiddleware, type Variables } from "../middleware/auth.js";
 import { newId } from "../lib/utils.js";
 import { users } from "../db/schema/users.js";
 import { decryptGlobal } from "../lib/crypto.js";
-import { getClient, resolveChannel, createForumTopic, type TelegramCredentials } from "../services/telegram/index.js";
+import { getClient, resolveChannel, createForumTopic, downloadFile, type TelegramCredentials } from "../services/telegram/index.js";
 import { getEnv } from "../env.js";
 import { emitActivity } from "../lib/event-bus.js";
+import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 const folders = new Hono<{ Variables: Variables }>();
 
@@ -55,7 +58,164 @@ folders.get("/stats/usage", authMiddleware, async (c) => {
   return c.json({ data: { totalSize, fileCount, folderCount, itemCount: items.length } });
 });
 
-// Dynamic ZIP Download for Folders (On-the-fly streaming)
+// ── Minimal ZIP writer (store method, CRC32) — tanpa dependency eksternal ──
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function zipDateTime(d: Date): { dosTime: number; dosDate: number } {
+  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  return { dosTime, dosDate };
+}
+
+// Sanitasi nama entri ZIP: cegah path traversal (zip-slip) & path absolut
+function sanitizeZipPath(parts: string[]): string | null {
+  const clean: string[] = [];
+  for (let part of parts) {
+    part = part.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+    if (!part || part === ".") continue;
+    if (part === "..") return null; // traversal → tolak
+    if (/^[a-zA-Z]:/.test(part)) continue; // drive letter → buang prefix
+    clean.push(part);
+  }
+  return clean.join("/") || null;
+}
+
+// Build ZIP in memory (stored entries) from [{ name, buffer, mtime }]
+function buildZip(entries: { name: string; buffer: Buffer; mtime: Date }[]): Buffer {
+  const chunks: Buffer[] = [];
+  const central: Buffer[] = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name, "utf8");
+    const { dosTime, dosDate } = zipDateTime(entry.mtime);
+    const crc = crc32(entry.buffer);
+    const size = entry.buffer.length;
+
+    // Local file header
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); // signature
+    local.writeUInt16LE(20, 4); // version needed
+    local.writeUInt16LE(0x0800, 6); // flags (UTF-8)
+    local.writeUInt16LE(0, 8); // method: stored
+    local.writeUInt16LE(dosTime, 10);
+    local.writeUInt16LE(dosDate, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(size, 18);
+    local.writeUInt32LE(size, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28); // extra len
+    chunks.push(local, nameBuf, entry.buffer);
+
+    // Central directory record
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);
+    cen.writeUInt16LE(20, 4); // version made by
+    cen.writeUInt16LE(20, 6); // version needed
+    cen.writeUInt16LE(0x0800, 8);
+    cen.writeUInt16LE(0, 10); // method
+    cen.writeUInt16LE(dosTime, 12);
+    cen.writeUInt16LE(dosDate, 14);
+    cen.writeUInt32LE(crc, 16);
+    cen.writeUInt32LE(size, 20);
+    cen.writeUInt32LE(size, 24);
+    cen.writeUInt16LE(nameBuf.length, 28);
+    cen.writeUInt16LE(0, 30); // extra
+    cen.writeUInt16LE(0, 32); // comment
+    cen.writeUInt16LE(0, 34); // disk
+    cen.writeUInt16LE(0, 36); // internal attrs
+    cen.writeUInt32LE(0, 38); // external attrs
+    cen.writeUInt32LE(offset, 42); // local header offset
+    central.push(Buffer.concat([cen, nameBuf]));
+
+    offset += 30 + nameBuf.length + size;
+  }
+
+  const centralStart = offset;
+  const centralBuf = Buffer.concat(central);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8); // total entries (disk 0)
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(centralStart, 16);
+  eocd.writeUInt16LE(0, 20); // comment len
+
+  return Buffer.concat([...chunks, centralBuf, eocd]);
+}
+
+function resolveLocalPath(remoteId: string): string {
+  const filename = remoteId.replace("local://", "");
+  const candidates = [
+    resolve("./storage-temp"),
+    resolve("./apps/api/storage-temp"),
+    resolve("../../storage-temp"),
+  ];
+  for (const dir of candidates) {
+    const p = join(dir, filename);
+    if (existsSync(p)) return p;
+  }
+  return join(resolve("./storage-temp"), filename);
+}
+
+async function resolveUserCreds(userId: string) {
+  const env = getEnv();
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user?.telegramApiIdEncrypted || !user?.telegramApiHashEncrypted || !user?.telegramSessionEncrypted) return null;
+  return {
+    creds: {
+      apiId: Number(decryptGlobal(user.telegramApiIdEncrypted)),
+      apiHash: decryptGlobal(user.telegramApiHashEncrypted),
+      sessionString: decryptGlobal(user.telegramSessionEncrypted),
+    } as TelegramCredentials,
+    channelName: user.telegramStorageChannelName || env.TDRIVE_STORAGE_CHANNEL,
+    isSupergroup: (user.telegramStorageMode || "supergroup") === "supergroup",
+  };
+}
+
+// Ambil buffer file dari local staging atau Telegram
+async function fetchFileBuffer(userId: string, item: typeof driveItems.$inferSelect) {
+  const remoteId = item.storageRemoteId ?? "";
+  if (remoteId.startsWith("local://")) {
+    const p = resolveLocalPath(remoteId);
+    if (existsSync(p)) return await readFile(p);
+  }
+  if (remoteId.startsWith("telegram://")) {
+    const clean = remoteId.replace(/^telegram:\/\//, "");
+    const [channelIdStr, messageIdStr] = clean.split("/");
+    const channelId = parseInt(channelIdStr, 10);
+    const messageId = parseInt(messageIdStr, 10);
+    if (!isNaN(channelId) && !isNaN(messageId)) {
+      const creds = await resolveUserCreds(userId);
+      if (creds) {
+        const { buffer } = await downloadFile(userId, creds.creds, channelId, messageId, 0, undefined, creds.channelName, creds.isSupergroup);
+        return buffer;
+      }
+    }
+  }
+  return null;
+}
+
+// Dynamic ZIP Download for Folders — rekursif, ambil semua file + subfolder
 folders.get("/:id/zip", authMiddleware, async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
@@ -66,10 +226,52 @@ folders.get("/:id/zip", authMiddleware, async (c) => {
 
   if (!folder) return c.json({ error: "Folder not found" }, 404);
 
-  // Return download response header for ZIP archive
-  return c.text(`ZIP Archive stream for folder: ${folder.name}`, 200, {
-    "Content-Type": "application/zip",
-    "Content-Disposition": `attachment; filename="${folder.name}.zip"`,
+  // Kumpulkan semua item di dalam folder (rekursif)
+  const entries: { name: string; buffer: Buffer; mtime: Date }[] = [];
+  const queue: { id: string; prefix: string }[] = [{ id, prefix: folder.name }];
+  let skipped = 0;
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const children = await db.select().from(driveItems)
+      .where(and(eq(driveItems.parentId, current.id), eq(driveItems.userId, userId), isNull(driveItems.deletedAt)))
+      .orderBy(driveItems.kind);
+
+    for (const child of children) {
+      const sanitized = sanitizeZipPath([current.prefix, child.name]);
+      if (!sanitized) { skipped++; continue; }
+      const relPath = sanitized;
+      if (child.kind === "folder") {
+        queue.push({ id: child.id, prefix: relPath });
+      } else {
+        const buf = await fetchFileBuffer(userId, child).catch(() => null);
+        if (buf) {
+          entries.push({ name: relPath, buffer: buf, mtime: child.updatedAt ?? new Date() });
+        } else {
+          skipped++;
+        }
+      }
+    }
+  }
+
+  if (entries.length === 0) {
+    return c.json({ error: "Empty", message: skipped > 0 ? "File tidak dapat diunduh" : "Folder kosong", statusCode: 400 }, 400);
+  }
+
+  // Guard ukuran: cegah OOM untuk folder raksasa (maks ~400MB per ZIP)
+  const totalBytes = entries.reduce((a, e) => a + e.buffer.length, 0);
+  if (totalBytes > 400 * 1024 * 1024) {
+    return c.json({ error: "Payload Too Large", message: "Folder terlalu besar untuk ZIP (maks 400MB)", statusCode: 413 }, 413);
+  }
+
+  const zip = buildZip(entries);
+  const safeName = folder.name.replace(/[^\w\-. ]+/g, "_").trim() || "folder";
+  return new Response(new Uint8Array(zip), {
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${safeName}.zip"`,
+      "Content-Length": String(zip.length),
+    },
   });
 });
 
