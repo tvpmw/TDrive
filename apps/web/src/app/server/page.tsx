@@ -281,7 +281,7 @@ export default function ServerPage() {
       )}
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto pb-fab">
         {!status?.ready ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <AlertCircle className="h-12 w-12 mb-2 opacity-50" />

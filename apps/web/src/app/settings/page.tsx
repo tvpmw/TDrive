@@ -37,7 +37,7 @@ export default function SettingsPage() {
           <Settings className="h-4 w-4" />
           <h1 className="font-semibold">Settings</h1>
         </div>
-        <div className="flex-1 overflow-auto p-4">
+        <div className="flex-1 overflow-auto p-4 pb-fab">
           {isLoading ? (
             <div className="text-muted-foreground text-sm">Loading settings...</div>
           ) : (

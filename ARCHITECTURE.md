@@ -169,3 +169,40 @@ Proses deduplikasi pintar (*Smart Auto-Clean*) mengevaluasi grup duplikat dan me
 - **`item_chunk_manifests`:** Manifest pemecahan chunk file besar ke banyak message Telegram.
 - **`saved_searches`:** Query pencarian tersimpan pengguna.
 - **`file_relations`:** Pemetaan keterikatan berkas.
+
+---
+
+## 6. Frontend Responsive & Mobile UX Patterns
+
+### Utility `pb-fab` — Clearance FAB Hamburger Mobile
+
+FAB hamburger navigasi dirender sebagai elemen **`fixed bottom-4 left-4`** (48px) hanya di viewport `< 768px`. Agar konten di pojok kiri-bawah (footer list, kartu terakhir) tidak tertutup FAB saat scroll ke ujung, semua scroll container halaman authed memakai satu utility khusus:
+
+```css
+/* apps/web/src/app/globals.css */
+@utility pb-fab {
+  @media (width < 48rem) {  /* = breakpoint md Tailwind, literal agar didukung semua browser */
+    padding-bottom: 6rem;   /* = pb-24 (96px) */
+  }
+}
+```
+
+Aturan pemakaian:
+1. **Mobile-only**: media query ter-bake-in di definisi utility, jadi **jangan** kombinasikan dengan varian responsif (mis. `md:pb-fab`) — varian itu tidak akan pernah cocok.
+2. **Tidak menimpa padding desktop**: di `md+` utility tidak men-set apa pun, sehingga padding asli elemen (`p-4`/`p-6`/tanpa padding) berlaku kembali. Karena itu satu class `pb-fab` menggantikan `pb-24 md:pb-0/4/6` yang dulu berbeda-beda per halaman.
+3. **Cascade**: Tailwind v4 mengurutkan custom utility berdasarkan properti (`padding-bottom` = grup `pb-*`, sesudah `p-*`), jadi `pb-fab` aman menimpa shorthand `p-*` di mobile.
+
+Halaman yang memakai `pb-fab` (14): `drive-explorer`, `trash`, `server`, `server/health`, `server/benchmark`, `stealth`, `vault`, `network`, `workflows`, `suite`, `api-status`, `settings`, `dashboard`, `drive/duplicates`.
+
+### Widget Upload (fixed bottom)
+
+Widget upload mobile dirender full-width di `bottom-20` (di atas FAB yang footprint-nya 64px), dan `md+` jadi kartu kanan-bawah. Daftar tugas dibatasi `max-h-[35vh]` di layar kecil agar tidak menutupi layar.
+
+### Verifikasi Otomatis — `scripts/check-responsive.mjs`
+
+Skrip Playwright ini memverifikasi: tidak ada horizontal scroll/elemen keluar viewport/scroller melebihi viewport, breakpoint `md` (hamburger vs sidebar), interaksi drawer, dan **clearance `pb-fab`** (aktif 96px di `< 768px`, nonaktif di `md+`). Jalankan:
+
+```bash
+node scripts/check-responsive.mjs --base http://localhost:3004 --widths 320,390,768,1280 \
+  --email <test-email> --password <test-password>
+```

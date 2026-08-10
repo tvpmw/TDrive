@@ -22,3 +22,6 @@ Thumbs.db
 .gemini/
 .idea/
 .vscode/
+
+# Verification Script Artifacts (scripts/check-responsive.mjs)
+.artifacts/

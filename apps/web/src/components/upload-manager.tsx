@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, createContext, useContext, ReactNode } from "react";
-import { Upload, CheckCircle2, AlertCircle, X, ChevronUp, ChevronDown, RefreshCw } from "lucide-react";
+import { Upload, CheckCircle2, AlertCircle, X, ChevronUp, ChevronDown } from "lucide-react";
 import { formatBytes } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -66,9 +66,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     >
       {children}
 
-      {/* Floating Upload Widget */}
+      {/* Floating Upload Widget
+          Mobile: full-width bar above the nav FAB (bottom-20) so it never blocks navigation.
+          md+: right-anchored floating card. */}
       {tasks.length > 0 && (
-        <div className="fixed bottom-4 right-4 w-80 md:w-96 bg-card border border-border rounded-xl shadow-2xl z-50 overflow-hidden text-card-foreground transition-all">
+        <div className="fixed left-4 right-4 bottom-20 md:left-auto md:right-4 md:bottom-4 w-auto md:w-96 bg-card border border-border rounded-xl shadow-2xl z-50 overflow-hidden text-card-foreground transition-all">
           {/* Header */}
           <div
             className="flex items-center justify-between px-4 py-3 bg-muted/60 border-b border-border cursor-pointer select-none"
@@ -99,16 +101,16 @@ export function UploadProvider({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          {/* Body List */}
+          {/* Body List — batas tinggi proporsional di layar kecil (35vh) agar tray tidak menutupi layar */}
           {!minimized && (
-            <div className="max-h-60 overflow-y-auto divide-y divide-border p-2 space-y-2">
+            <div className="max-h-[35vh] sm:max-h-60 overflow-y-auto divide-y divide-border p-2 space-y-2">
               {tasks.map((task) => (
                 <div key={task.id} className="p-2 space-y-1.5 rounded-lg hover:bg-accent/40 transition-colors">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium truncate max-w-[200px]" title={task.name}>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span className="font-medium truncate min-w-0 flex-1" title={task.name}>
                       {task.name}
                     </span>
-                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground shrink-0">
                       {task.status === "completed" && (
                         <span className="text-green-500 flex items-center gap-0.5 font-medium">
                           <CheckCircle2 className="h-3 w-3" /> Selesai
@@ -121,6 +123,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
                       )}
                       {task.status === "uploading" && <span>{formatBytes(task.size)}</span>}
                     </div>
+                    <button
+                      onClick={() => removeTask(task.id)}
+                      className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+                      aria-label={`Hapus ${task.name} dari daftar unggahan`}
+                      title="Hapus dari daftar"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   </div>
 
                   {task.status === "uploading" && (

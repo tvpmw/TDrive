@@ -12,11 +12,12 @@ export function CommandPaletteTrigger() {
         const event = new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true });
         document.dispatchEvent(event);
       }}
-      className="flex items-center justify-between w-full max-w-xs px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all text-xs"
+      className="flex items-center justify-between gap-2 w-auto max-w-[240px] sm:max-w-xs px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all text-xs"
+      aria-label="Search commands"
     >
       <span className="flex items-center gap-2">
         <Search className="h-3.5 w-3.5 text-slate-400" />
-        <span>Search commands...</span>
+        <span className="hidden sm:inline">Search commands...</span>
       </span>
       <kbd className="hidden sm:inline-flex h-5 select-none items-center gap-1 rounded border border-slate-700 bg-slate-800 px-1.5 font-mono text-[10px] font-medium text-slate-300">
         <span className="text-[11px]">⌘</span>K

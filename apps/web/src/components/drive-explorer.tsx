@@ -357,7 +357,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
+      <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4 pb-fab" onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
         {/* Supabase-inspired Stats Grid */}
         <StatsGrid
           totalFiles={usage?.fileCount ?? items.length}
@@ -412,34 +412,36 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
             </div>
           )}
           <div className="flex-1" />
-          <div className="relative w-72 hidden md:block">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input placeholder='Cari: nama, type:image, size:>50MB...' value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="pl-7 h-8 text-xs" />
+          <div className="flex items-center gap-2 w-full md:w-auto">
+            <div className="relative flex-1 min-w-0 md:w-72">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input placeholder='Cari: nama, type:image, size:>50MB...' value={searchInput} onChange={(e) => setSearchInput(e.target.value)} className="pl-7 h-8 text-xs" />
+            </div>
+            <Button variant={showAnalytics ? "secondary" : "outline"} size="sm" className="h-8 w-8 p-0 shrink-0 md:w-auto md:px-3 md:text-xs" onClick={() => setShowAnalytics(!showAnalytics)} aria-label="Analytics">
+              <BarChart2 className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden md:inline">Analytics</span>
+            </Button>
           </div>
-          <div className="flex items-center gap-0.5 flex-wrap justify-end">
+          <div className="flex items-center gap-0.5 sm:gap-1 flex-wrap justify-end">
             {(["name", "size", "date"] as const).map((field) => (
-              <Button key={field} variant={sortBy === field ? "secondary" : "ghost"} size="sm" className="h-10 text-xs px-3 md:h-7 md:px-2" onClick={() => toggleSort(field)}>
+              <Button key={field} variant={sortBy === field ? "secondary" : "ghost"} size="sm" className="h-8 text-[11px] px-1.5 sm:h-7 sm:text-xs sm:px-2" onClick={() => toggleSort(field)}>
                 {field === "name" ? "Name" : field === "size" ? "Size" : "Date"}
                 {sortBy === field && <span className="ml-0.5">{sortDir === "asc" ? "↑" : "↓"}</span>}
               </Button>
             ))}
           </div>
           <div className="flex border border-border rounded-md">
-            <Button variant={viewMode === "list" ? "secondary" : "ghost"} size="icon" className="h-7 w-7 rounded-r-none" onClick={() => setViewMode("list")}>
+            <Button variant={viewMode === "list" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7 rounded-r-none" onClick={() => setViewMode("list")}>
               <List className="h-3.5 w-3.5" />
             </Button>
-            <Button variant={viewMode === "grid" ? "secondary" : "ghost"} size="icon" className="h-7 w-7 rounded-l-none" onClick={() => setViewMode("grid")}>
+            <Button variant={viewMode === "grid" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 sm:h-7 sm:w-7 rounded-l-none" onClick={() => setViewMode("grid")}>
               <LayoutGrid className="h-3.5 w-3.5" />
             </Button>
           </div>
-          <Button variant={showAnalytics ? "secondary" : "outline"} size="sm" className="h-8 text-xs" onClick={() => setShowAnalytics(!showAnalytics)}>
-            <BarChart2 className="h-3.5 w-3.5 mr-1" /> Analytics
+          <Button variant="outline" size="sm" className="h-8 px-2 sm:px-3 text-xs" onClick={() => setShowNewFolder(true)} aria-label="Buat folder">
+            <FolderPlus className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Folder</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setShowNewFolder(true)}>
-            <FolderPlus className="h-3.5 w-3.5 mr-1" /> Folder
-          </Button>
-          <Button size="sm" className="h-8 text-xs" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="h-3.5 w-3.5 mr-1" /> Upload
+          <Button size="sm" className="h-8 px-2 sm:px-3 text-xs" onClick={() => fileInputRef.current?.click()} aria-label="Upload file">
+            <Upload className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Upload</span>
           </Button>
           <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileUpload} />
         </div>
@@ -485,7 +487,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
         {showNewFolder && (
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/50">
             <FolderPlus className="h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Folder name" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} className="h-8 w-64" autoFocus
+            <Input placeholder="Folder name" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} className="h-8 w-full sm:w-64" autoFocus
               onKeyDown={(e) => { if (e.key === "Enter" && newFolderName.trim()) createFolderMutation.mutate(newFolderName.trim()); if (e.key === "Escape") setShowNewFolder(false); }} />
             <Button size="sm" variant="ghost" onClick={() => setShowNewFolder(false)}>Cancel</Button>
           </div>
@@ -521,34 +523,46 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
               {sortedItems.map((item) => (
                 <ContextMenu key={item.id}>
                   <ContextMenuTrigger>
-                    <div className={cn("flex items-center gap-3 px-3 py-2 hover:bg-muted/50 cursor-pointer group transition-colors", selectedIds.has(item.id) && "bg-muted/70")}
+                    <div className={cn("flex items-center gap-2 sm:gap-3 px-3 py-2 hover:bg-muted/50 cursor-pointer group transition-colors", selectedIds.has(item.id) && "bg-muted/70")}
                       onClick={(e) => { if (e.ctrlKey || e.metaKey) { toggleSelect(item.id); return; } if (item.kind === "folder") router.push(`/drive/${item.id}`); }}
                       onDoubleClick={() => { if (item.kind === "folder") router.push(`/drive/${item.id}`); }}>
                       {selectedIds.has(item.id) && <div className="h-4 w-4 rounded border-2 border-primary bg-primary/20 shrink-0" />}
                       {getFileIcon(item)}
-                      <div className="flex-1 min-w-0"><p className="text-sm truncate font-medium">{item.name}</p></div>
-                      {item.kind === "file" && <SyncBadge status={item.syncStatus} />}
-                      <span className="text-xs text-muted-foreground shrink-0 w-16 text-right tabular-nums">
+                      <div className="flex-1 min-w-0"><p title={item.name} className="text-sm truncate font-medium">{item.name}</p></div>
+                      {item.kind === "file" && (
+                        <>
+                          <span className="hidden sm:inline-flex shrink-0"><SyncBadge status={item.syncStatus} /></span>
+                          <span className="sm:hidden shrink-0" title={item.syncStatus === "sync_failed" ? "Sync gagal" : item.syncStatus === "local" ? "Belum di-sync" : item.syncStatus === "syncing" ? "Menyinkronkan..." : "Tersinkron"}>
+                            {item.syncStatus === "sync_failed" && <span className="block h-2 w-2 rounded-full bg-red-500" />}
+                            {item.syncStatus === "local" && <span className="block h-2 w-2 rounded-full bg-amber-500" />}
+                            {item.syncStatus === "syncing" && <span className="block h-2 w-2 rounded-full bg-blue-500 animate-pulse" />}
+                            {item.syncStatus === "synced" && <span className="block h-2 w-2 rounded-full bg-green-500/70" />}
+                          </span>
+                        </>
+                      )}
+                      <span className="text-xs text-muted-foreground shrink-0 w-16 text-right tabular-nums hidden sm:block">
                         {item.kind === "file" ? formatBytes(item.size) : "—"}
                       </span>
-                      <span className="text-xs text-muted-foreground shrink-0 w-24 text-right">
+                      <span className="text-xs text-muted-foreground shrink-0 w-24 text-right hidden md:block">
                         {new Date(item.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       </span>
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {item.kind === "file" && (
-                          <Tooltip><TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); startDownload(item); }}>
-                              <Download className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger><TooltipContent>Download</TooltipContent></Tooltip>
-                        )}
-                        {item.kind === "file" && item.syncStatus !== "synced" && item.syncStatus !== "syncing" && (
-                          <Tooltip><TooltipTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); syncMutation.mutate(item.id); }} disabled={syncMutation.isPending}>
-                              <Cloud className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger><TooltipContent>Sync to Telegram</TooltipContent></Tooltip>
-                        )}
+                      <div className="flex items-center gap-0.5 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+                        <div className="hidden sm:flex sm:items-center sm:gap-0.5">
+                          {item.kind === "file" && (
+                            <Tooltip><TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); startDownload(item); }}>
+                                <Download className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger><TooltipContent>Download</TooltipContent></Tooltip>
+                          )}
+                          {item.kind === "file" && item.syncStatus !== "synced" && item.syncStatus !== "syncing" && (
+                            <Tooltip><TooltipTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); syncMutation.mutate(item.id); }} disabled={syncMutation.isPending}>
+                                <Cloud className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger><TooltipContent>Sync to Telegram</TooltipContent></Tooltip>
+                          )}
+                        </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()}>
@@ -636,7 +650,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
                         </div>
                         {item.kind === "file" && <div className="absolute -bottom-1 -right-1"><SyncBadge status={item.syncStatus} /></div>}
                       </div>
-                      <p className="text-xs font-medium text-center w-full truncate mt-1">{item.name}</p>
+                      <p title={item.name} className="text-xs font-medium text-center w-full line-clamp-2 break-words mt-1">{item.name}</p>
                       <p className="text-[10px] text-muted-foreground mt-0.5">{item.kind === "file" ? formatBytes(item.size) : "Folder"}</p>
                     </div>
                   </ContextMenuTrigger>

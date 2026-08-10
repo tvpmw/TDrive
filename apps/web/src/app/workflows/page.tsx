@@ -210,23 +210,23 @@ export default function WorkflowsPage() {
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border/60 bg-card/40 backdrop-blur-md">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 p-4 border-b border-border/60 bg-card/40 backdrop-blur-md">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 shrink-0">
               <Workflow className="h-5 w-5" />
             </div>
-            <div>
-              <h1 className="text-base font-bold tracking-tight">AI Workflow Automation & Rules Engine</h1>
-              <p className="text-xs text-muted-foreground">Otomasi Pintar Tanpa Koding untuk Mengelola File & Telegram Topic Secara Otomatis</p>
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-bold tracking-tight">AI Workflow Automation & Rules Engine</h1>
+              <p className="hidden sm:block text-xs text-muted-foreground">Otomasi Pintar Tanpa Koding untuk Mengelola File & Telegram Topic Secara Otomatis</p>
             </div>
           </div>
           <Button onClick={() => setShowModal(true)} size="sm" className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold gap-1.5 shadow-md shadow-emerald-500/20 rounded-lg">
-            <Plus className="h-4 w-4" /> Buat Otomasi Baru
+            <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Buat Otomasi Baru</span>
           </Button>
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 pb-fab">
           {statusMsg && (
             <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium flex items-center gap-2 animate-in fade-in shadow-md">
               <CheckCircle className="h-4 w-4 shrink-0" />

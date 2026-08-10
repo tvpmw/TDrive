@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
@@ -8,7 +8,7 @@ import { queryKeys } from "@/lib/query-keys";
 import {
   HardDrive, Trash2, Settings, LogOut, Cloud, CloudOff, Shield, User, Sparkles,
   Lock, Search, FolderPlus, Upload, Command, Layers, Flame, Network, Workflow, ShieldAlert, LayoutDashboard,
-  PanelLeftClose, PanelLeft
+  Menu, X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -59,7 +59,15 @@ export function Sidebar({ className }: SidebarProps = {}) {
     router.push("/login");
   };
 
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+  // Track viewport client-side only (after mount) to avoid SSR hydration mismatch (React error #418)
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
   const content = (
     <>
@@ -81,7 +89,7 @@ export function Sidebar({ className }: SidebarProps = {}) {
         </div>
         {isMobile && (
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMobileOpen(false)}>
-            <PanelLeftClose className="h-4 w-4" />
+            <X className="h-4 w-4" />
           </Button>
         )}
       </div>
@@ -189,15 +197,16 @@ export function Sidebar({ className }: SidebarProps = {}) {
             size="icon"
             className="fixed bottom-4 left-4 z-40 h-12 w-12 rounded-full shadow-lg bg-background/90 border border-border"
             onClick={() => setMobileOpen(true)}
+            aria-label="Buka menu navigasi"
           >
-            <PanelLeft className="h-5 w-5" />
+            <Menu className="h-5 w-5" />
           </Button>
         )}
         {mobileOpen && (
-          <div className="md:hidden fixed inset-0 z-50">
+          <div className="md:hidden fixed inset-0 z-[60]">
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
             <div className="absolute left-0 top-0 h-full w-72 shadow-2xl">
-              <aside className={cn("w-72 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm h-full", className)}>
+              <aside className={cn(className, "w-72 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm h-full")}>
                 {content}
               </aside>
             </div>

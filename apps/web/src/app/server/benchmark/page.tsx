@@ -68,7 +68,7 @@ export default function BenchmarkPage() {
           </Button>
         </header>
 
-        <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
+        <main className="p-6 space-y-6 max-w-7xl w-full mx-auto pb-fab">
           {lastUpdatedMsg && (
             <div className="p-3 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center justify-between animate-in fade-in">
               <span className="flex items-center gap-2">

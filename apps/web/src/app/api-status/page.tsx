@@ -62,7 +62,7 @@ export default function ApiStatusPage() {
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-4 pb-fab">
         {isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <RefreshCw className="h-4 w-4 animate-spin" /> Checking API health...

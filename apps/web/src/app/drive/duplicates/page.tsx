@@ -146,7 +146,7 @@ export default function DuplicateFinderPage() {
         </div>
       </header>
 
-      <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
+      <main className="p-6 space-y-6 max-w-7xl w-full mx-auto pb-fab">
         {notice && (
           <div
             className={`p-3.5 rounded-lg text-xs font-semibold flex items-center justify-between animate-in fade-in ${

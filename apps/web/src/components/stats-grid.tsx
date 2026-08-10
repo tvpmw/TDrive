@@ -88,26 +88,26 @@ export function StatsGrid({
 
   return (
     <div className="space-y-3 mb-6">
-      <div className="flex items-center justify-between px-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-1">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
-          <h2 className="text-sm font-semibold tracking-wide text-foreground uppercase">
+          <h2 className="text-xs sm:text-sm font-semibold tracking-wide text-foreground uppercase">
             System & Storage Telemetry Grid
           </h2>
         </div>
-        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-full border border-border/40">
+        <span className="hidden sm:inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-full border border-border/40">
           <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
           All Services Online
         </span>
       </div>
 
-      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="flex gap-2.5 overflow-x-auto pb-1.5 -mx-1 px-1 snap-x sm:grid sm:grid-cols-2 sm:gap-3.5 sm:overflow-visible sm:pb-0 sm:mx-0 sm:px-0 sm:snap-none lg:grid-cols-3 xl:grid-cols-6">
         {stats.map((stat, idx) => {
           const Icon = stat.icon;
           return (
             <div
               key={idx}
-              className={`relative flex flex-col justify-between overflow-hidden rounded-xl border bg-gradient-to-br p-4 backdrop-blur-md transition-all duration-300 hover:scale-[1.02] hover:shadow-xl ${stat.accentColor}`}
+              className={`relative flex flex-col justify-between overflow-hidden rounded-xl border bg-gradient-to-br p-3.5 sm:p-4 backdrop-blur-md transition-all duration-300 [@media(hover:hover)]:hover:scale-[1.02] [@media(hover:hover)]:hover:shadow-xl min-w-[210px] shrink-0 snap-start sm:min-w-0 sm:shrink ${stat.accentColor}`}
             >
               <div>
                 <div className="flex items-center justify-between mb-2.5">

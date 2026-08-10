@@ -179,7 +179,7 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        <main className="p-6 space-y-6 max-w-7xl w-full mx-auto">
+        <main className="p-6 space-y-6 max-w-7xl w-full mx-auto pb-fab">
           {/* Executive KPI Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <Card className="bg-slate-900 border-slate-800 relative overflow-hidden">

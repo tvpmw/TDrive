@@ -36,7 +36,7 @@ export default function VaultPage() {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-fab">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Duress Vault Settings */}
             <Card className="border-border/60 bg-card/60 backdrop-blur-md">

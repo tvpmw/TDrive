@@ -59,6 +59,21 @@ body {
   letter-spacing: -0.011em;
 }
 
+/* Clearance untuk FAB hamburger mobile (fixed bottom-4 left-4, h-12): memberi ruang
+   pada scroll container di < md agar konten pojok kiri-bawah tidak tertutup FAB.
+   Hanya aktif di mobile; di md+ tidak men-set apa pun sehingga padding asli elemen
+   (p-4/p-6/tanpa padding) berlaku seperti semula.
+   Nilai 48rem = breakpoint md Tailwind (768px) — ditulis literal agar output jadi
+   media query statis (didukung semua browser), konsisten dengan cara Tailwind
+   mengompilasi varian md: sendiri.
+   Catatan: karena media query sudah ter-bake-in, jangan kombinasikan dengan varian
+   responsif (mis. md:pb-fab) — varian itu tidak akan pernah cocok. */
+@utility pb-fab {
+  @media (width < 48rem) {
+    padding-bottom: 6rem;
+  }
+}
+
 /* Custom Sleek Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

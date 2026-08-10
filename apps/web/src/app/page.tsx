@@ -21,15 +21,15 @@ export default function LandingPage() {
       </div>
 
       {/* Header Navigation */}
-      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/80 backdrop-blur-md px-4 sm:px-6 py-3 sm:py-4">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3">
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-emerald-500 via-teal-600 to-cyan-700 flex items-center justify-center shadow-md shadow-emerald-500/20 text-white">
               <Flame className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-lg tracking-tight text-white">TDrive</span>
+                <span className="font-extrabold text-base sm:text-lg tracking-tight text-white">TDrive</span>
               </div>
             </div>
           </div>
@@ -43,14 +43,14 @@ export default function LandingPage() {
           </nav>
 
           {/* Auth CTAs */}
-          <div className="flex items-center gap-3">
-            <Link href="/login">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link href="/login" className="hidden sm:block">
               <Button variant="ghost" size="sm" className="text-slate-300 hover:text-white hover:bg-slate-900 text-xs">
                 Log In
               </Button>
             </Link>
             <Link href="/login">
-              <Button size="sm" className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white text-xs font-semibold shadow-lg shadow-emerald-600/25 px-4">
+              <Button size="sm" className="bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white text-xs font-semibold shadow-lg shadow-emerald-600/25 px-3 sm:px-4">
                 Get Started Free <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
               </Button>
             </Link>

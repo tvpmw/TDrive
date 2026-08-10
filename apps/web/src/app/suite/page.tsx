@@ -61,7 +61,7 @@ export default function SuitePage() {
         </div>
 
         {/* Workspace Body */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-6 pb-fab">
           <Tabs defaultValue="torrent" className="space-y-6">
             <TabsList className="bg-card border border-border/60 p-1 rounded-xl">
               <TabsTrigger value="torrent" className="gap-2 text-xs font-medium">
