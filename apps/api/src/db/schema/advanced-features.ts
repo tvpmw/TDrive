@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, index, foreignKey, text } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, timestamp, index, foreignKey, text, jsonb } from "drizzle-orm/pg-core";
 import { users } from "./users.js";
 import { driveItems } from "./drive-items.js";
 
@@ -95,6 +95,7 @@ export const automationRules = pgTable(
     triggerEvent: varchar("trigger_event", { length: 64 }).notNull(), // e.g. "file.uploaded"
     actionType: varchar("action_type", { length: 64 }).notNull(), // e.g. "webhook" | "ai_summarize"
     targetUrl: text("target_url"),
+    config: jsonb("config"), // { conditions, actions, conditionGroup, triggerLabel }
     isActive: integer("is_active").default(1).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },

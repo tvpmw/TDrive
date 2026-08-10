@@ -14,7 +14,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Trash2, RotateCcw, File, Folder, XCircle, Search, Image, Film, Music, Archive, Code, FileText, RefreshCw, Clock, HardDrive, AlertTriangle, ArrowUpRight, ArrowDownRight, LayoutGrid, List } from "lucide-react";
+import { Trash2, RotateCcw, File, Folder, XCircle, Search, Image, Film, Music, Archive, Code, FileText, RefreshCw, Clock, HardDrive, AlertTriangle, ArrowUpRight, ArrowDownRight, LayoutGrid, List, TimerReset } from "lucide-react";
 import { cn, formatBytes } from "@/lib/utils";
 import { useState } from "react";
 import type { DriveItem } from "@tdrive/shared";
@@ -63,6 +63,35 @@ export default function TrashPage() {
     mutationFn: () => apiClient.delete("/trash"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.trash() }),
   });
+
+  // --- Auto-purge / retensi trash ---
+  const { data: retention } = useQuery({
+    queryKey: ["trash-retention"],
+    queryFn: () => apiClient.get("/trash/retention").then((r) => r.data.data as { enabled: boolean; days: number }),
+    refetchInterval: 30_000,
+  });
+
+  const retentionMutation = useMutation({
+    mutationFn: (cfg: { enabled: boolean; days: number }) => apiClient.put("/trash/retention", cfg),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["trash-retention"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.trash() });
+    },
+  });
+
+  const retentionDays = retention?.days ?? 30;
+  const retentionEnabled = retention?.enabled ?? false;
+
+  const formatTimeLeft = (deletedAt: string | Date) => {
+    const target = new Date(deletedAt).getTime() + retentionDays * 24 * 60 * 60 * 1000;
+    const ms = target - Date.now();
+    if (ms <= 0) return "akan dihapus";
+    const d = Math.floor(ms / (24 * 60 * 60 * 1000));
+    const h = Math.floor((ms % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+    if (d > 0) return `${d} hari ${h} jam`;
+    const m = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+    return `${h} jam ${m} mnt`;
+  };
 
   const batchRestoreMutation = useMutation({
     mutationFn: async () => {
@@ -148,6 +177,42 @@ export default function TrashPage() {
           )}
         </div>
 
+        {/* Auto-purge settings bar */}
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-muted/30">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <TimerReset className="h-3.5 w-3.5 text-emerald-500" />
+            <span className="font-medium text-foreground">Auto-hapus permanen</span>
+          </div>
+          <Button
+            size="sm"
+            variant={retentionEnabled ? "default" : "outline"}
+            className="h-7 text-xs"
+            onClick={() => retentionMutation.mutate({ enabled: !retentionEnabled, days: retentionDays })}
+            disabled={retentionMutation.isPending}
+          >
+            {retentionEnabled ? "Aktif" : "Nonaktif"}
+          </Button>
+          <div className="flex items-center gap-1">
+            {[7, 14, 30, 90].map((d) => (
+              <Button
+                key={d}
+                size="sm"
+                variant={retentionDays === d ? "secondary" : "ghost"}
+                className="h-7 text-xs px-2"
+                onClick={() => retentionMutation.mutate({ enabled: retentionEnabled, days: d })}
+                disabled={retentionMutation.isPending}
+              >
+                {d} hari
+              </Button>
+            ))}
+          </div>
+          <span className="text-[11px] text-muted-foreground hidden sm:inline">
+            {retentionEnabled
+              ? `Item di trash otomatis dihapus permanen setelah ${retentionDays} hari`
+              : "Item di trash disimpan sampai dihapus manual"}
+          </span>
+        </div>
+
       {/* Content */}
       <div className="flex-1 overflow-auto pb-fab">
         {isLoading ? (
@@ -184,6 +249,11 @@ export default function TrashPage() {
                 </div>
                 <p className="text-xs font-medium text-center w-full truncate">{item.name}</p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">{formatBytes(item.size)}</p>
+                {item.deletedAt && retentionEnabled && (
+                  <p className="flex items-center gap-1 text-[9px] text-amber-500/90 mt-1 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5" title={`Dihapus ${new Date(item.deletedAt).toLocaleString("id-ID")}`}>
+                    <Clock className="h-2.5 w-2.5 shrink-0" /> {formatTimeLeft(item.deletedAt)}
+                  </p>
+                )}
                 <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Button variant="ghost" size="icon" className="h-6 w-6"
                     onClick={(e) => { e.stopPropagation(); restoreMutation.mutate(item.id); }}

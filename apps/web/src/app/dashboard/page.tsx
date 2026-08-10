@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sidebar } from "@/components/sidebar";
+import { MonthlyActivityHeatmap } from "@/components/monthly-activity-heatmap";
 import {
   LayoutDashboard, HardDrive, Send, Server, Cpu, RefreshCw, Activity,
   ShieldCheck, Layers, Image, Film, Music, Archive, FileText, Sparkles,
@@ -331,6 +332,9 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Monthly Activity Heatmap (GitHub-style) */}
+          <MonthlyActivityHeatmap activity7Days={activity7Days} />
 
           {/* Deep Category Breakdown & OS Hardware Profiler */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

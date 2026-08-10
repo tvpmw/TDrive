@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Sidebar } from "@/components/sidebar";
-import { Settings, User, Send, CheckCircle, AlertCircle, Loader2, Shield, Database, Globe, Key, Cpu, RefreshCw, Layers } from "lucide-react";
+import { Settings, User, Send, CheckCircle, AlertCircle, Loader2, Shield, Database, Globe, Key, Cpu, RefreshCw, Layers, Bell } from "lucide-react";
 
 interface MeData {
   id: string;
@@ -67,6 +67,7 @@ export default function SettingsPage() {
                   hasSession={me?.hasTelegramSession ?? false}
                 />
                 <TelegramStorageModeSelector />
+                <TelegramNotificationSettings />
               </TabsContent>
 
               <TabsContent value="telegram-bot">
@@ -752,6 +753,112 @@ function TelegramStorageModeSelector() {
             Simpan Mode Penyimpanan Telegram
           </Button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TelegramNotificationSettings() {
+  const queryClient = useQueryClient();
+  const [enabled, setEnabled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    apiClient
+      .get("/notifications")
+      .then((r) => {
+        setEnabled(r.data.data?.enabled ?? true);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const handleToggle = async (v: boolean) => {
+    setEnabled(v);
+    try {
+      await apiClient.put("/notifications", { enabled: v });
+      setTestMsg({ ok: true, text: v ? "Notifikasi diaktifkan." : "Notifikasi dinonaktifkan." });
+      setTimeout(() => setTestMsg(null), 3000);
+    } catch {
+      setTestMsg({ ok: false, text: "Gagal menyimpan pengaturan." });
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const r = await apiClient.post("/notifications/test");
+      setTestMsg({ ok: true, text: "Pesan uji terkirim ke Telegram Anda! ✅" });
+    } catch (e: any) {
+      setTestMsg({ ok: false, text: e?.response?.data?.message || "Gagal kirim pesan uji." });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Card className="border-border/60 bg-card/60 backdrop-blur-md">
+      <CardHeader>
+        <CardTitle className="text-base font-semibold flex items-center gap-2">
+          <Bell className="h-5 w-5 text-emerald-400" /> Notifikasi Telegram
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Dapatkan notifikasi saat upload selesai atau gagal, langsung ke chat Telegram Anda (Saved Messages / storage channel).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {testMsg && (
+          <div
+            className={`p-3 rounded-lg border text-xs font-semibold flex items-center gap-2 ${
+              testMsg.ok
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : "bg-red-500/10 border-red-500/30 text-red-400"
+            }`}
+          >
+            {testMsg.ok ? <CheckCircle className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />} {testMsg.text}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-1">
+            <span className="text-xs font-semibold text-foreground">Aktifkan notifikasi upload</span>
+            <p className="text-[11px] text-muted-foreground">
+              Kirim pesan Telegram saat file selesai di-upload atau gagal sinkronisasi.
+            </p>
+          </div>
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <button
+              role="switch"
+              aria-checked={enabled}
+              onClick={() => handleToggle(!enabled)}
+              className={`relative h-6 w-11 rounded-full transition-colors shrink-0 ${
+                enabled ? "bg-emerald-500" : "bg-muted-foreground/30"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                  enabled ? "left-[22px]" : "left-0.5"
+                }`}
+              />
+            </button>
+          )}
+        </div>
+
+        <Button
+          onClick={handleTest}
+          size="sm"
+          disabled={testing}
+          variant="outline"
+          className="text-xs font-semibold border-border/60"
+        >
+          {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Send className="h-3.5 w-3.5 mr-1" />}
+          Kirim Pesan Uji
+        </Button>
       </CardContent>
     </Card>
   );

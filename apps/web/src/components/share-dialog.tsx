@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { apiClient } from "@/lib/api-client";
+import QRCode from "qrcode";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Share2, Copy, Check, Lock, Calendar, Trash2, Link } from "lucide-react";
+import { Share2, Copy, Check, Lock, Calendar, Trash2, Link, QrCode as QrCodeIcon } from "lucide-react";
 import type { DriveItem } from "@tdrive/shared";
 
 interface ShareDialogProps {
@@ -23,6 +24,25 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
   const [copied, setCopied] = useState(false);
   const [shareToken, setShareToken] = useState<string | null>(item?.shareToken ?? null);
   const [hasPassword, setHasPassword] = useState<boolean>(!!item?.hasSharePassword);
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Render QR code saat link tersedia
+  const renderQr = useCallback(async (url: string) => {
+    if (!qrCanvasRef.current || !url) return;
+    try {
+      await QRCode.toCanvas(qrCanvasRef.current, url, {
+        width: 168,
+        margin: 1,
+        color: { dark: "#0f172a", light: "#ffffff" },
+      });
+    } catch {
+      // QR gagal render — abaikan (link tetap berfungsi)
+    }
+  }, []);
+
+  const publicUrl = shareToken
+    ? `${window.location.origin}/s/${shareToken}`
+    : "";
 
   useEffect(() => {
     if (item) {
@@ -33,11 +53,11 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
     }
   }, [item]);
 
-  if (!item) return null;
+  useEffect(() => {
+    if (publicUrl) renderQr(publicUrl);
+  }, [publicUrl, renderQr]);
 
-  const publicUrl = shareToken
-    ? `${window.location.origin}/s/${shareToken}`
-    : "";
+  if (!item) return null;
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -98,6 +118,13 @@ export function ShareDialog({ item, open, onOpenChange, onUpdated }: ShareDialog
                 <Button size="icon" variant="outline" onClick={copyToClipboard}>
                   {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
                 </Button>
+              </div>
+
+              <div className="flex flex-col items-center gap-2 pt-1">
+                <canvas ref={qrCanvasRef} className="rounded-lg border border-border bg-white p-1.5" aria-label="QR code link berbagi" />
+                <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                  <QrCodeIcon className="h-3 w-3" /> Scan untuk membuka di ponsel
+                </p>
               </div>
 
               <div className="flex items-center justify-between pt-2 border-t text-xs text-muted-foreground">

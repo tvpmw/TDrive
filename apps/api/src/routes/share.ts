@@ -3,11 +3,12 @@ import { z } from "zod/v4";
 import { db } from "../db/index.js";
 import { driveItems } from "../db/schema/drive-items.js";
 import { users } from "../db/schema/users.js";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, desc } from "drizzle-orm";
 import { authMiddleware, type Variables } from "../middleware/auth.js";
 import { hashPassword, verifyPassword } from "../lib/bcrypt.js";
 import { randomUUID } from "node:crypto";
 import { downloadFile } from "../services/telegram/index.js";
+import { emitActivity } from "../lib/event-bus.js";
 import { decryptGlobal } from "../lib/crypto.js";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -39,6 +40,15 @@ async function getUserTelegramCreds(userId: string): Promise<TelegramCredentials
     sessionString: decryptGlobal(user.telegramSessionEncrypted),
   };
 }
+
+// Authenticated: List semua share link milik user (dengan jumlah unduhan)
+shareRoutes.get("/", authMiddleware, async (c) => {
+  const userId = c.get("userId");
+  const items = await db.select().from(driveItems)
+    .where(and(eq(driveItems.userId, userId), isNotNull(driveItems.shareToken), isNull(driveItems.deletedAt)))
+    .orderBy(desc(driveItems.updatedAt));
+  return c.json({ data: items });
+});
 
 // Authenticated: Generate/Update share link
 shareRoutes.post("/:id", authMiddleware, async (c) => {
@@ -74,6 +84,12 @@ shareRoutes.post("/:id", authMiddleware, async (c) => {
   }).where(eq(driveItems.id, id));
 
   const [updated] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
+  emitActivity({
+    type: "share.created",
+    message: `Link berbagi untuk “${item.name}” dibuat`,
+    itemName: item.name,
+    userId,
+  });
   return c.json({ data: updated });
 });
 

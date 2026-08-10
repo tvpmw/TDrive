@@ -8,12 +8,15 @@ import { queryKeys } from "@/lib/query-keys";
 import {
   HardDrive, Trash2, Settings, LogOut, Cloud, CloudOff, Shield, User, Sparkles,
   Lock, Search, FolderPlus, Upload, Command, Layers, Flame, Network, Workflow, ShieldAlert, LayoutDashboard,
-  Menu, X
+  Menu, X, Link2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatBytes } from "@/lib/utils";
+import { useTheme } from "@/components/theme-provider";
+import { PwaInstallButton } from "@/components/pwa-setup";
+import { Sun, Moon } from "lucide-react";
 
 interface MeData {
   id: string;
@@ -33,6 +36,7 @@ const navItems = [
   { label: "Stealth Disguise", icon: ShieldAlert, href: "/stealth", badge: "Camouflage" },
   { label: "Network Hub", icon: Network, href: "/network", badge: "Proxy" },
   { label: "AI Workflows", icon: Workflow, href: "/workflows", badge: "Auto" },
+  { label: "Share Links", icon: Link2, href: "/shares" },
   { label: "Trash Bin", icon: Trash2, href: "/trash" },
   { label: "Settings", icon: Settings, href: "/settings" },
 ];
@@ -87,11 +91,14 @@ export function Sidebar({ className }: SidebarProps = {}) {
             <p className="text-[11px] text-muted-foreground font-medium hidden sm:block">Telegram Drive Cloud System</p>
           </div>
         </div>
-        {isMobile && (
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMobileOpen(false)}>
-            <X className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          <ThemeToggle />
+          {isMobile && (
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setMobileOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <Separator className="opacity-50" />
@@ -182,6 +189,8 @@ export function Sidebar({ className }: SidebarProps = {}) {
           <LogOut className="h-3.5 w-3.5" />
           <span>Sign Out</span>
         </Button>
+
+        <PwaInstallButton />
       </div>
     </>
   );
@@ -221,6 +230,22 @@ export function Sidebar({ className }: SidebarProps = {}) {
     <aside className={cn("w-64 border-r border-border/60 bg-gradient-to-b from-background via-sidebar to-background flex flex-col shrink-0 shadow-sm", className)}>
       {content}
     </aside>
+  );
+}
+
+function ThemeToggle() {
+  const { resolvedTheme, toggleTheme } = useTheme();
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8"
+      onClick={toggleTheme}
+      aria-label={resolvedTheme === "light" ? "Ganti ke tema gelap" : "Ganti ke tema terang"}
+      title={resolvedTheme === "light" ? "Ganti ke tema gelap" : "Ganti ke tema terang"}
+    >
+      {resolvedTheme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+    </Button>
   );
 }
 

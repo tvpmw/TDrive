@@ -9,6 +9,7 @@ import { users } from "../db/schema/users.js";
 import { decryptGlobal } from "../lib/crypto.js";
 import { getClient, resolveChannel, createForumTopic, type TelegramCredentials } from "../services/telegram/index.js";
 import { getEnv } from "../env.js";
+import { emitActivity } from "../lib/event-bus.js";
 
 const folders = new Hono<{ Variables: Variables }>();
 
@@ -122,6 +123,12 @@ folders.post("/", authMiddleware, async (c) => {
   });
 
   const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
+  emitActivity({
+    type: "folder.created",
+    message: `Folder “${body.name}” dibuat`,
+    itemName: body.name,
+    userId,
+  });
   return c.json({ data: item }, 201);
 });
 

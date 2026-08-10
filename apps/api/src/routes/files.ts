@@ -13,7 +13,9 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { decryptGlobal } from "../lib/crypto.js";
 import { uploadFile, downloadFile } from "../services/telegram/index.js";
+import { getNotificationEnabled, sendTelegramNotification } from "../services/telegram/notifications.js";
 import { enqueueSync } from "../queue/index.js";
+import { emitActivity } from "../lib/event-bus.js";
 import type { TelegramCredentials } from "../services/telegram/client.js";
 import { EDITABLE_EXTENSIONS } from "@tdrive/shared";
 
@@ -189,6 +191,12 @@ files.post("/upload", authMiddleware, async (c) => {
     });
 
     const [item] = await db.select().from(driveItems).where(eq(driveItems.id, id)).limit(1);
+    emitActivity({
+      type: "file.uploaded",
+      message: `File “${item?.name ?? file.name}” diunggah (duplikat terdeteksi)`,
+      itemName: item?.name ?? file.name,
+      userId,
+    });
     return c.json({ data: item, instantUpload: true }, 201);
   }
 
@@ -247,6 +255,16 @@ files.post("/upload", authMiddleware, async (c) => {
           updatedAt: new Date(),
         }).where(eq(driveItems.id, createdItem.id));
         await unlink(stagedPath).catch(() => {});
+        // Notifikasi upload selesai (best-effort)
+        if (await getNotificationEnabled(userId)) {
+          const sizeMB = ((createdItem.size || 0) / 1024 / 1024).toFixed(2);
+          sendTelegramNotification(
+            userId,
+            userCredsForSync.creds,
+            `✅ TDrive — Upload selesai\n📄 ${createdItem.name}\n📦 ${sizeMB} MB`,
+            userCredsForSync.channelName
+          ).catch(() => {});
+        }
       } catch (err: any) {
         await db.update(driveItems).set({
           syncStatus: "sync_failed",
@@ -254,10 +272,25 @@ files.post("/upload", authMiddleware, async (c) => {
           updatedAt: new Date(),
         }).where(eq(driveItems.id, createdItem.id));
         await unlink(stagedPath).catch(() => {});
+        // Notifikasi upload gagal (best-effort)
+        if (await getNotificationEnabled(userId)) {
+          sendTelegramNotification(
+            userId,
+            userCredsForSync.creds,
+            `❌ TDrive — Upload gagal\n📄 ${createdItem.name}\n⚠️ ${err?.message || "Sync error"}`,
+            userCredsForSync.channelName
+          ).catch(() => {});
+        }
       }
     }).catch(() => {});
   }
 
+  emitActivity({
+    type: "file.uploaded",
+    message: `File “${createdItem.name}” diunggah`,
+    itemName: createdItem.name,
+    userId,
+  });
   return c.json({ data: createdItem }, 201);
 });
 
@@ -470,6 +503,12 @@ files.delete("/:id", authMiddleware, async (c) => {
   }
 
   await db.update(driveItems).set({ deletedAt: new Date(), updatedAt: new Date() }).where(eq(driveItems.id, id));
+  emitActivity({
+    type: "file.deleted",
+    message: `File “${item.name}” dipindah ke Trash`,
+    itemName: item.name,
+    userId,
+  });
   return c.body(null, 204);
 });
 

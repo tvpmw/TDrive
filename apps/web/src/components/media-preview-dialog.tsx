@@ -50,12 +50,13 @@ export function MediaPreviewDialog({ item, onClose }: MediaPreviewDialogProps) {
   const isAudio = ["mp3", "wav", "ogg", "flac", "aac", "m4a"].includes(ext);
   const isPdf = ext === "pdf";
 
-  // Backend streaming / download URL with inline flag
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || "/";
+  // Backend streaming / download URL — WAJIB same-origin (rewrite Next ke API) karena
+  // elemen browser (img/video/audio/iframe/a) tidak bisa resolve hostname internal
+  // seperti NEXT_PUBLIC_API_URL. Session cookie terkirim otomatis; ?token fallback.
   const token = typeof window !== "undefined" ? (localStorage.getItem("tdrive_token") || "") : "";
   const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
-  const streamUrl = `${apiBase}/api/files/${item.id}/download?inline=true${tokenQuery}`;
-  const downloadUrl = `${apiBase}/api/files/${item.id}/download?token=${encodeURIComponent(token)}`;
+  const streamUrl = `/api/files/${item.id}/download?inline=true${tokenQuery}`;
+  const downloadUrl = `/api/files/${item.id}/download?token=${encodeURIComponent(token)}`;
 
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>

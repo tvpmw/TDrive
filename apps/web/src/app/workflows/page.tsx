@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { apiClient } from "@/lib/api-client";
 import { Sidebar } from "@/components/sidebar";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -81,6 +82,28 @@ export default function WorkflowsPage() {
   const [act4Target, setAct4Target] = useState("https://api.perusahaan.com/hooks/accounting");
 
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // Muat aturan tersimpan dari backend (automation_rules). Selama belum ada data,
+  // halaman menampilkan 2 contoh demo agar UI tetap hidup (pola fallback dashboard).
+  useEffect(() => {
+    apiClient.get("/automation")
+      .then((r) => {
+        const items = (r.data.data || []) as any[];
+        if (items.length) {
+          setRules(items.map((x) => ({
+            id: x.id,
+            name: x.name,
+            trigger: x.triggerEvent,
+            triggerLabel: x.config?.triggerLabel || x.triggerEvent,
+            conditionGroup: x.config?.conditionGroup || "AND",
+            conditions: x.config?.conditions || [],
+            actions: x.config?.actions || [],
+            active: x.isActive === 1,
+          })));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Update dynamic preset options when Trigger changes
   useEffect(() => {
@@ -194,6 +217,39 @@ export default function WorkflowsPage() {
     setShowModal(false);
     setStatusMsg(`BERHASIL: Otomasi Pintar "${ruleName}" Berhasil Diaktifkan!`);
     setTimeout(() => setStatusMsg(null), 5000);
+
+    // Simpan ke backend (automation_rules)
+    apiClient.post("/automation", {
+      name: ruleName,
+      trigger_event: newTrigger,
+      action_type: act1Type,
+      target_url: act1Target || null,
+      config: {
+        conditions: [
+          { field: c1Field, operator: c1Op, value: c1Val },
+          { field: c2Field, operator: c2Op, value: c2Val },
+          { field: c3Field, operator: c3Op, value: c3Val },
+        ],
+        actions: [
+          { type: act1Type, target: act1Target },
+          { type: act2Type, target: act2Target },
+          { type: act3Type, target: act3Target },
+          { type: act4Type, target: act4Target },
+        ],
+        conditionGroup: newConditionGroup,
+        triggerLabel: triggerLabelMap[newTrigger] || "Event Pemicu",
+      },
+    })
+      .then((res) => {
+        const saved = res.data.data;
+        setRules((prev) => prev.map((r) => (r.id === deployedRule.id ? { ...r, id: saved.id } : r)));
+      })
+      .catch(() => {});
+  };
+
+  const handleToggleRule = (id: string, active: boolean) => {
+    setRules((prev) => prev.map((r) => (r.id === id ? { ...r, active } : r)));
+    if (!id.startsWith("rule-")) apiClient.patch(`/automation/${id}`, { is_active: active ? 1 : 0 }).catch(() => {});
   };
 
   const handleTestRun = (ruleName: string) => {
@@ -203,6 +259,7 @@ export default function WorkflowsPage() {
 
   const handleDeleteRule = (id: string) => {
     setRules((prev) => prev.filter((r) => r.id !== id));
+    if (!id.startsWith("rule-")) apiClient.delete(`/automation/${id}`).catch(() => {});
   };
 
   return (
@@ -356,9 +413,15 @@ export default function WorkflowsPage() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-sm text-foreground">{rule.name}</span>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px] font-semibold">Otomasi Aktif</Badge>
+                    <Badge variant="outline" className={rule.active ? "border-emerald-500/40 text-emerald-400 text-[10px] font-semibold" : "border-muted-foreground/30 text-muted-foreground text-[10px] font-semibold"}>
+                      {rule.active ? "Otomasi Aktif" : "Nonaktif"}
+                    </Badge>
                   </div>
                   <div className="flex items-center gap-1">
+                    <Button onClick={() => handleToggleRule(rule.id, !rule.active)} size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground hover:text-emerald-400">
+                      {rule.active ? <SlidersHorizontal className="h-3.5 w-3.5 mr-1" /> : <Play className="h-3.5 w-3.5 mr-1 text-emerald-400" />}
+                      {rule.active ? "Nonaktifkan" : "Aktifkan"}
+                    </Button>
                     <Button onClick={() => handleTestRun(rule.name)} size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground hover:text-emerald-400">
                       <Play className="h-3.5 w-3.5 mr-1 text-emerald-400" /> Uji Jalankan Simulasi
                     </Button>
