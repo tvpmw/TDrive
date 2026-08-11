@@ -42,6 +42,10 @@ export const driveItems = pgTable(
     index("idx_drive_items_name").on(table.name),
     index("idx_drive_items_deleted_at").on(table.deletedAt),
     index("idx_drive_items_share_token").on(table.shareToken),
+    // Composite & hot-query indexes: listing per folder, global listing, dedup upload
+    index("idx_drive_items_user_parent").on(table.userId, table.parentId),
+    index("idx_drive_items_user_deleted").on(table.userId, table.deletedAt),
+    index("idx_drive_items_file_hash").on(table.fileHash),
     foreignKey({ columns: [table.userId], foreignColumns: [users.id] }),
   ]
 );

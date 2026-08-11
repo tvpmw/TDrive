@@ -29,6 +29,14 @@ const files = new Hono<{ Variables: Variables }>();
 // Storage temp directory for staging uploads
 const TEMP_DIR = resolve("./storage-temp");
 
+// Pagination default & clamp untuk GET /files
+const LIST_PAGE_SIZE = 50;
+const LIST_MAX_LIMIT = 500;
+
+// Cache singkat untuk /tags/summary — tag jarang berubah, hindari full-scan per request
+const tagSummaryCache = new Map<string, { at: number; payload: { tags: { name: string; count: number }[]; collections: { name: string; count: number }[] } }>();
+const TAG_SUMMARY_TTL_MS = 30_000;
+
 async function ensureTempDir() {
   await mkdir(TEMP_DIR, { recursive: true });
 }
@@ -58,6 +66,13 @@ function parseTelegramRemoteId(remoteId: string): { channelId: number; messageId
 // Ringkasan semua tag & koleksi milik user (untuk filter chip di drive)
 files.get("/tags/summary", authMiddleware, async (c) => {
   const userId = c.get("userId");
+
+  // Cache hit dalam TTL 30s — kembalikan langsung tanpa query
+  const hit = tagSummaryCache.get(userId);
+  if (hit && Date.now() - hit.at < TAG_SUMMARY_TTL_MS) {
+    return c.json({ data: hit.payload });
+  }
+
   // Hanya ambil rows yang benar-benar punya tags/collections (bukan load semua item)
   const rows = await db.select({ tags: driveItems.tags, collections: driveItems.collections })
     .from(driveItems)
@@ -83,7 +98,12 @@ files.get("/tags/summary", authMiddleware, async (c) => {
     .sort((a, b) => b.count - a.count);
   const collections = Array.from(collMap.entries()).map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count);
-  return c.json({ data: { tags, collections } });
+
+  const payload = { tags, collections };
+  // Jaga ukuran cache tetap terbatas (1 entry per user aktif)
+  if (tagSummaryCache.size > 500) tagSummaryCache.clear();
+  tagSummaryCache.set(userId, { at: Date.now(), payload });
+  return c.json({ data: payload });
 });
 
 files.get("/", authMiddleware, async (c) => {
@@ -108,6 +128,12 @@ files.get("/", authMiddleware, async (c) => {
     });
   }
 
+  // Pagination opsional: tanpa ?limit tetap return semua (backward compatible)
+  const limitParam = c.req.query("limit");
+  const offsetParam = c.req.query("offset");
+  const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || LIST_PAGE_SIZE, 1), LIST_MAX_LIMIT) : null;
+  const offset = offsetParam ? Math.max(parseInt(offsetParam, 10) || 0, 0) : 0;
+
   const conditions = [
     eq(driveItems.userId, userId),
     isNull(driveItems.deletedAt),
@@ -123,9 +149,30 @@ files.get("/", authMiddleware, async (c) => {
     }
   }
 
+  // Ordering deterministik (tie-breaker id) supaya offset-pagination stabil
+  const orderByClause = [driveItems.kind, driveItems.name, driveItems.id];
+
+  if (limit !== null) {
+    const [rows, countRows] = await Promise.all([
+      db.select().from(driveItems)
+        .where(and(...conditions))
+        .orderBy(...orderByClause)
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: sql<number>`count(*)::int` })
+        .from(driveItems)
+        .where(and(...conditions)),
+    ]);
+    const total = Number(countRows[0]?.count ?? 0);
+    return c.json({
+      data: rows,
+      meta: { total, limit, offset, hasMore: offset + rows.length < total },
+    });
+  }
+
   const items = await db.select().from(driveItems)
     .where(and(...conditions))
-    .orderBy(driveItems.kind, driveItems.name);
+    .orderBy(...orderByClause);
 
   return c.json({ data: items });
 });

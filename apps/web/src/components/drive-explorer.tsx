@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -97,6 +97,8 @@ function SyncBadge({ status }: { status: DriveItem["syncStatus"] }) {
   return null;
 }
 
+const LIST_PAGE_SIZE = 50;
+
 export function DriveExplorer({ folderId }: { folderId?: string }) {
   const parentId = folderId ?? null;
   const router = useRouter();
@@ -124,6 +126,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
   const [isDragging, setIsDragging] = useState(false);
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [visibleCount, setVisibleCount] = useState(LIST_PAGE_SIZE);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -159,20 +162,34 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { data: items = [], isLoading } = useQuery({
+  // Reset pagination saat konteks list berubah (folder/search/filter)
+  useEffect(() => {
+    setVisibleCount(LIST_PAGE_SIZE);
+  }, [parentId, search, categoryFilter, tagFilter]);
+
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: queryKeys.files(parentId),
-    queryFn: () =>
-      apiClient
-        .get("/files", {
-          params: {
-            parent_id: parentId || undefined,
-            search: search || undefined,
-            recursive: !!search || categoryFilter !== "all",
-          },
-        })
-        .then((r) => r.data.data as DriveItem[]),
+    queryFn: async () => {
+      const r = await apiClient.get("/files", {
+        params: {
+          parent_id: parentId || undefined,
+          search: search || undefined,
+          recursive: !!search || categoryFilter !== "all",
+          limit: visibleCount, // pagination: hanya tarik sejumlah yang terlihat
+        },
+      });
+      const meta = (r.data as { meta?: { total?: number; hasMore?: boolean } }).meta;
+      return {
+        items: r.data.data as DriveItem[],
+        hasMore: !!meta?.hasMore,
+        total: meta?.total ?? 0,
+      };
+    },
+    placeholderData: keepPreviousData, // list tetap tampil saat load-more
     refetchInterval: 3000, // ⚡ Auto-sync polling every 3 seconds for instant background updates
   });
+  const items = data?.items ?? [];
+  const hasMore = data?.hasMore ?? false;
 
   const { data: breadcrumbPath = [] } = useQuery({
     queryKey: queryKeys.folderPath(parentId ?? "root"),
@@ -1227,7 +1244,7 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
         </div>
 
         <div className="flex items-center justify-between px-3 py-1 border-t border-border bg-muted/30 text-xs text-muted-foreground">
-          <span>{sortedItems.length} item{sortedItems.length !== 1 ? "s" : ""}{search && " (filtered)"}</span>
+          <span>{sortedItems.length}{hasMore ? "+" : ""} item{sortedItems.length !== 1 ? "s" : ""}{search && " (filtered)"}</span>
           <span className="hidden sm:flex items-center gap-3 text-[10px]">
             <span><kbd className="px-1 py-0.5 rounded border border-border bg-background">Ctrl+A</kbd> pilih semua</span>
             <span><kbd className="px-1 py-0.5 rounded border border-border bg-background">Del</kbd> trash</span>
@@ -1238,6 +1255,21 @@ export function DriveExplorer({ folderId }: { folderId?: string }) {
           <span>{items.filter((i) => i.kind === "file").reduce((a, i) => a + i.size, 0) > 0
             ? `Total: ${formatBytes(items.filter((i) => i.kind === "file").reduce((a, i) => a + i.size, 0))}` : ""}</span>
         </div>
+
+        {hasMore && (
+          <div className="flex justify-center py-3 border-t border-border">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => setVisibleCount((c) => c + LIST_PAGE_SIZE)}
+              disabled={isFetching}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
+              Muat lebih banyak
+            </Button>
+          </div>
+        )}
 
         {editingFile && <TextEditorDialog fileId={editingFile.id} fileName={editingFile.name} onClose={() => setEditingFile(null)} />}
         {showBatchRename && (
